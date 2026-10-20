@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include <jansson.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -11,6 +12,7 @@
 #include "providers/opencode.h"
 #include "providers/provider_config.h"
 #include "providers/registry.h"
+#include "system/fs.h"
 
 /* The env-alias rows registered in config.c for the shipped -compatible blocks must project
  * the provider field inventory: same leaves, same dialect, same secrecy. */
@@ -202,6 +204,16 @@ static void test_headers_merge_and_expand(void)
     string_array_free(overrides);
 }
 
+static void expect_api_key(const char *prefix, const char *env, const char *want)
+{
+    char *key = provider_api_key(prefix, env);
+    EXPECT(key != NULL);
+    if (!key)
+        return;
+    EXPECT_STR_EQ(key, want);
+    free(key);
+}
+
 /* An inline api_key accepts the same "$NAME" indirection, falling through to api_key_env
  * when the variable is unset; "$$" escapes a literal leading dollar. */
 static void test_api_key_env_escape(void)
@@ -211,16 +223,53 @@ static void test_api_key_env_escape(void)
     EXPECT(provider_api_key("providers.dollartest", NULL) == NULL);
 
     setenv("HAX_TEST_FALLBACK_KEY", "sk-fallback", 1);
-    EXPECT_STR_EQ(provider_api_key("providers.dollartest", "HAX_TEST_FALLBACK_KEY"), "sk-fallback");
+    expect_api_key("providers.dollartest", "HAX_TEST_FALLBACK_KEY", "sk-fallback");
     setenv("HAX_TEST_DOLLAR_KEY", "sk-dollar", 1);
-    EXPECT_STR_EQ(provider_api_key("providers.dollartest", "HAX_TEST_FALLBACK_KEY"), "sk-dollar");
+    expect_api_key("providers.dollartest", "HAX_TEST_FALLBACK_KEY", "sk-dollar");
 
     config_set_override("providers.dollartest.api_key", "$$literal");
-    EXPECT_STR_EQ(provider_api_key("providers.dollartest", NULL), "$literal");
+    expect_api_key("providers.dollartest", NULL, "$literal");
 
     config_set_override("providers.dollartest.api_key", NULL);
     unsetenv("HAX_TEST_DOLLAR_KEY");
     unsetenv("HAX_TEST_FALLBACK_KEY");
+}
+
+/* A credential may come from a file or a command instead of the environment. Both yield the
+ * first non-blank line, an inline api_key still wins, and a broken source falls through. */
+static void test_api_key_sources(void)
+{
+    const char *prefix = "providers.sourcetest";
+    char *dir = t_tempdir();
+    char path[600];
+    snprintf(path, sizeof(path), "%s/key", dir);
+    const char *contents = "  sk-file \nignored metadata\n";
+    EXPECT(fs_write_atomic(path, contents, strlen(contents), 0) == 0);
+
+    config_set_override("providers.sourcetest.api_key_file", path);
+    expect_api_key(prefix, NULL, "sk-file");
+
+    /* The command form reads the same way, tolerating the metadata `pass show` appends. */
+    config_set_override("providers.sourcetest.api_key_file", NULL);
+    config_set_override("providers.sourcetest.api_key_command", "printf 'sk-cmd\\nmetadata'");
+    expect_api_key(prefix, NULL, "sk-cmd");
+
+    /* An inline api_key stays the most direct source; file precedes command otherwise. */
+    config_set_override("providers.sourcetest.api_key", "sk-inline");
+    expect_api_key(prefix, NULL, "sk-inline");
+    config_set_override("providers.sourcetest.api_key", NULL);
+    config_set_override("providers.sourcetest.api_key_file", path);
+    expect_api_key(prefix, NULL, "sk-file");
+
+    /* A source that yields nothing falls through to the next, then to api_key_env. */
+    config_set_override("providers.sourcetest.api_key_file", "/nonexistent/hax-test-key");
+    config_set_override("providers.sourcetest.api_key_command", "exit 1");
+    setenv("HAX_TEST_SOURCE_FALLBACK", "sk-env", 1);
+    expect_api_key(prefix, "HAX_TEST_SOURCE_FALLBACK", "sk-env");
+
+    config_set_override("providers.sourcetest.api_key_file", NULL);
+    config_set_override("providers.sourcetest.api_key_command", NULL);
+    unsetenv("HAX_TEST_SOURCE_FALLBACK");
 }
 
 /* Whether `name` appears in provider_all() (the selectable set). */
@@ -602,6 +651,7 @@ int main(void)
     test_extra_headers();
     test_headers_merge_and_expand();
     test_api_key_env_escape();
+    test_api_key_sources();
 
     config_free();
     T_REPORT();

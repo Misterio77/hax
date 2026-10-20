@@ -9,6 +9,11 @@ notes (see [docs/releasing.md](docs/releasing.md)).
 
 ### Added
 
+- Provider credentials can come from a file or a command instead of the environment:
+  `providers.<id>.api_key_file` reads a path (sops-nix and other secret stores) and
+  `providers.<id>.api_key_command` runs a helper such as `pass show`. Both take the first
+  non-blank line, and a configured source that fails falls back to the next one after a warning.
+  See [docs/providers.md](docs/providers.md#custom-providers).
 - `/tree` navigates conversation turns in the same session. Editing an old prompt preserves its
   descendants, including history left by `/undo`. Branch switches persist immediately, keep the
   current model selection, and print only a short marker; Ctrl-O shows the selected history. Rows

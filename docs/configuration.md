@@ -98,7 +98,19 @@ export OPENROUTER_API_KEY=...
 ```
 
 For a custom provider, use `api_key_env` to name its credential variable rather than putting the
-credential itself in JSON.
+credential itself in JSON. A secret that only exists as a file, as with sops-nix, comes in through
+`api_key_file`; one that a password manager can print comes in through `api_key_command`:
+
+```json
+{
+  "providers": {
+    "deepseek": { "api_key_file": "/run/secrets/deepseek" },
+    "openrouter": { "api_key_command": "pass show llm/openrouter" }
+  }
+}
+```
+
+See [provider credentials](./providers.md#custom-providers) for precedence and behavior.
 
 ## Common configurations
 

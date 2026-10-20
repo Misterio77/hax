@@ -717,17 +717,27 @@ void http_provider_availability(const struct provider_def *def, struct provider_
 
     char *prefix = xasprintf("providers.%s", def->id);
     const char *inline_key = config_scoped_str(prefix, "api_key");
+    const char *key_file = config_scoped_str(prefix, "api_key_file");
+    const char *key_command = config_scoped_str(prefix, "api_key_command");
     const char *key_env = def->pinned ? def->api_key_env : config_scoped_str(prefix, "api_key_env");
     if (!def->pinned && (!key_env || !*key_env))
         key_env = def->api_key_env;
-    if ((inline_key && *inline_key) || key_env) {
-        const char *api_key = provider_api_key(prefix, key_env);
+    if ((inline_key && *inline_key) || (key_file && *key_file) || (key_command && *key_command) ||
+        key_env) {
+        char *api_key = provider_api_key(prefix, key_env);
         out->available = api_key != NULL;
         if (!out->available) {
-            /* Name the exact variable or key to set. */
-            out->reason = key_env ? xasprintf("%s not set", key_env)
-                                  : xasprintf("providers.%s.api_key not set", def->id);
+            /* Name the exact source to configure. */
+            if (key_file && *key_file)
+                out->reason = xasprintf("couldn't read %s", key_file);
+            else if (key_command && *key_command)
+                out->reason = xasprintf("providers.%s.api_key_command produced no key", def->id);
+            else if (key_env)
+                out->reason = xasprintf("%s not set", key_env);
+            else
+                out->reason = xasprintf("providers.%s.api_key not set", def->id);
         }
+        free(api_key);
     } else if (!def->probe) {
         /* Keyless without a probing def: configuration is the whole check, because a generic
          * endpoint may serve only its completion route and no /models. */
@@ -940,8 +950,7 @@ struct provider *http_provider_new(const struct provider_def *def)
             def->pinned ? def->api_key_env : config_scoped_str(prefix, "api_key_env");
         if (!def->pinned && (!api_key_env || !*api_key_env))
             api_key_env = def->api_key_env;
-        const char *api_key = provider_api_key(prefix, api_key_env);
-        provider->api_key = api_key ? xstrdup(api_key) : NULL;
+        provider->api_key = provider_api_key(prefix, api_key_env);
     }
     provider->name = xstrdup(resolve_display_name(def, prefix));
     const char *catalog_id = provider_catalog_id(def);

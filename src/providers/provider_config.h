@@ -7,8 +7,8 @@
 
 /* The providers.<name> config vocabulary: the field inventory, the unused-field lint, and
  * per-field resolution helpers, shared by the generic constructor (http_provider_new) and the
- * hook modules. The API key is the one value read from the environment, via a def- or
- * config-declared api_key_env: a secret belongs in the environment, not the config file. */
+ * hook modules. The API key is the one value supplied out of band: inline, from a file, from a
+ * command's output, or from a def- or config-declared api_key_env. */
 
 /* Field vocabulary of a providers.<name> block. The inventory is declarative only: value
  * acceptance lives in the dialect constructors, and the env-alias rows in config.c project a
@@ -50,11 +50,14 @@ const struct provider_field *provider_fields(size_t *n);
 void provider_warn_unused_fields(const char *name, const char *api_label, unsigned classes,
                                  const char *const *extra);
 
-/* Resolve the provider's credential: inline <prefix>.api_key, else the named environment
- * variable. An inline "$NAME" value reads the environment variable NAME instead, keeping the
- * secret out of the config file ("$$" escapes a literal '$'); unresolved indirection falls
- * through to api_key_env. Borrowed; NULL when nothing resolves. */
-const char *provider_api_key(const char *config_prefix, const char *api_key_env);
+/* Resolve the provider's credential from the first source that yields one: inline
+ * <prefix>.api_key, then <prefix>.api_key_file, then <prefix>.api_key_command, then the named
+ * environment variable. An inline "$NAME" value reads the environment variable NAME instead,
+ * keeping the secret out of the config file ("$$" escapes a literal '$'). A file path expands a
+ * leading `~` and resolves a relative name against the hax config directory; a command runs
+ * through /bin/sh. Both yield the first non-blank line, and a configured source that fails falls
+ * through to the next after a warning. Owned; NULL when nothing resolves. */
+char *provider_api_key(const char *config_prefix, const char *api_key_env);
 
 /* Resolve <prefix>.cache_ttl to a canonical static "5m" or "1h", warning on any other value.
  * Defaults to 1h, which suits an interactive agent's pauses better than the API's 5m. */

@@ -303,13 +303,33 @@ Common fields:
 | `display_name` | Human-readable banner name. |
 | `api` | `openai-completions` (default), `openai-responses`, `anthropic-messages`, or `catalog`. |
 | `model_apis` | Model-id globs mapped to `api` dialects; the first match sets that model's protocol. |
-| `api_key_env` | Name of the environment variable holding the key; recommended. |
+| `api_key_env` | Name of the environment variable holding the key. |
+| `api_key_file` | Path to a file holding the key; `~` expands and a relative path resolves against the config directory. |
+| `api_key_command` | Command whose first output line is the key; runs through `/bin/sh`. |
 | `api_key` | Literal key, or `$VAR` to read an environment variable. |
 | `sort_models` | Sort this provider's model picker newest-first (default); `off` keeps server order. |
 | `catalog_id` | Provider id in models.dev for cost/context metadata; unset means none. |
 | `metadata_api` | `/models` dialect: `openai` (flat list) or `anthropic` (paginated); defaults to the request protocol's family. |
 | `extra_body` | Raw JSON members merged into every request body ([below](#request-passthrough)). |
 | `extra_headers` | HTTP headers sent on every request ([below](#request-passthrough)). |
+
+A block reads its credential from the first source that yields one: `api_key`, then `api_key_file`,
+then `api_key_command`, then `api_key_env`. A source that fails — an unreadable file, a command
+that exits nonzero, or a blank result — warns and is skipped, so a missing secret file can still
+fall back to the environment. The file and command forms read only the first non-blank line, which
+suits `pass show` entries whose password comes before their metadata. A relative `api_key_file`
+resolves against the hax config directory, like prompt files. Commands run through `/bin/sh`
+without stdin, bounded by a ten-second timeout, whenever the key is resolved.
+
+```json
+{
+  "providers": {
+    "deepseek": { "api_key_file": "/run/secrets/deepseek" },
+    "company-proxy": { "base_url": "https://llm.example.com/v1",
+                       "api_key_command": "pass show company-llm" }
+  }
+}
+```
 
 A custom provider has no catalog identity until `catalog_id` names one, so a block for a local
 server or a private proxy never contacts models.dev. Set it to the models.dev provider id (for
@@ -347,7 +367,7 @@ that rejects tool calls without their reasoning, such as a proxy to DeepSeek wit
 
 Every provider reads only its own block. The `HAX_OPENAI_*` and `HAX_ANTHROPIC_*` variables belong
 to the shipped `openai-compatible` / `anthropic-compatible` blocks and do not bleed into others;
-for a custom provider, only the variable named by `api_key_env` is read. Provider names cannot
+for a custom provider, only the credential sources in its own block are read. Provider names cannot
 contain `.`; a block named after a shipped provider configures that provider rather than
 replacing it.
 

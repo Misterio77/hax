@@ -2,6 +2,7 @@
 #include "providers/provider_config.h"
 
 #include <ctype.h>
+#include <errno.h>
 #include <jansson.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,10 +12,18 @@
 #include "diag.h"
 #include "trace.h"
 #include "xalloc.h"
+#include "system/fs.h"
+#include "system/path.h"
 #include "system/rand.h"
+#include "system/spawn.h"
 #include "text/placeholder.h"
 
 #define SESSION_PLACEHOLDER "session_id"
+
+/* A key source should hold one line; the cap only stops a mistyped path from streaming a whole
+ * file, and the command timeout a credential helper from stalling startup. */
+#define API_KEY_MAX_BYTES          (64 * 1024)
+#define API_KEY_COMMAND_TIMEOUT_MS 10000
 
 #define FIELD_ANY (PROVIDER_FIELD_OPENAI | PROVIDER_FIELD_ANTHROPIC)
 /* Responses fixes its reasoning shape and round-trip on the wire and never sends explicit cache
@@ -29,6 +38,8 @@ static const struct provider_field PROVIDER_FIELDS[] = {
     {.leaf = "base_url",            .classes = FIELD_ANY},
     {.leaf = "port",                .classes = PROVIDER_FIELD_PORT_TEMPLATED},
     {.leaf = "api_key",             .classes = PROVIDER_FIELD_KEYED, .secret = 1},
+    {.leaf = "api_key_file",        .classes = PROVIDER_FIELD_KEYED, .secret = 1},
+    {.leaf = "api_key_command",     .classes = PROVIDER_FIELD_KEYED, .secret = 1},
     {.leaf = "api_key_env",         .classes = PROVIDER_FIELD_UNPINNED},
     {.leaf = "display_name",        .classes = FIELD_ANY},
     {.leaf = "catalog_id",          .classes = FIELD_ANY},
@@ -91,14 +102,108 @@ static const char *resolve_env_escape(const char *value)
     return resolved;
 }
 
-const char *provider_api_key(const char *config_prefix, const char *api_key_env)
+/* The first non-blank line of a key source, trimmed, as an owned string. Credential helpers often
+ * append metadata (`pass show` prints the password first) or a newline; a key is never multi-line.
+ * Takes ownership of `text`; returns NULL when the first line is blank. */
+static char *key_first_line(char *text)
 {
-    const char *key = config_scoped_str(config_prefix, "api_key");
-    if (key && *key)
-        key = resolve_env_escape(key);
-    if (!key || !*key)
-        key = api_key_env ? getenv(api_key_env) : NULL;
-    if (!key || !*key)
+    char *line = text;
+    while (*line == ' ' || *line == '\t' || *line == '\r' || *line == '\n')
+        line++;
+    size_t len = strcspn(line, "\r\n");
+    while (len > 0 && (line[len - 1] == ' ' || line[len - 1] == '\t'))
+        len--;
+    char *key = NULL;
+    if (len > 0) {
+        key = xmalloc(len + 1);
+        memcpy(key, line, len);
+        key[len] = '\0';
+    }
+    free(text);
+    return key;
+}
+
+/* Read a key from disk: `~` expands to $HOME and relative paths resolve against the hax config
+ * directory, like prompt files. Returns an owned key, or NULL after warning. */
+static char *key_from_file(const char *label, const char *spec)
+{
+    char *path;
+    if (spec[0] == '~')
+        path = path_expand_home(spec);
+    else if (spec[0] == '/')
+        path = xstrdup(spec);
+    else
+        path = xdg_hax_config_path(spec);
+    if (!path) {
+        hax_warn("%s: couldn't resolve the path '%s'", label, spec);
+        return NULL;
+    }
+
+    int truncated = 0;
+    char *content = fs_read_file_capped(path, API_KEY_MAX_BYTES, NULL, &truncated);
+    if (!content) {
+        hax_warn("%s: couldn't read %s: %s — ignoring it", label, path, strerror(errno));
+        free(path);
+        return NULL;
+    }
+    char *key = NULL;
+    if (truncated) {
+        hax_warn("%s: %s exceeds %d bytes — ignoring it", label, path, API_KEY_MAX_BYTES);
+        free(content);
+    } else {
+        key = key_first_line(content);
+        if (!key)
+            hax_warn("%s: %s holds no key — ignoring it", label, path);
+    }
+    free(path);
+    return key;
+}
+
+/* Run a shell command and read a key from its first output line. The command inherits the
+ * environment but not stdin, so a helper that insists on a terminal fails instead of hanging. */
+static char *key_from_command(const char *label, const char *command)
+{
+    const char *argv[] = {"/bin/sh", "-c", command, NULL};
+    size_t len = 0;
+    char *output = spawn_capture_stdout(argv, API_KEY_MAX_BYTES, API_KEY_COMMAND_TIMEOUT_MS, &len);
+    if (!output) {
+        hax_warn("%s: '%s' failed or printed nothing — ignoring it", label, command);
+        return NULL;
+    }
+    char *key = key_first_line(output);
+    if (!key)
+        hax_warn("%s: '%s' printed no key — ignoring it", label, command);
+    return key;
+}
+
+char *provider_api_key(const char *config_prefix, const char *api_key_env)
+{
+    const char *inline_value = config_scoped_str(config_prefix, "api_key");
+    const char *file_spec = config_scoped_str(config_prefix, "api_key_file");
+    const char *command = config_scoped_str(config_prefix, "api_key_command");
+
+    char *key = NULL;
+    if (inline_value && *inline_value) {
+        const char *resolved = resolve_env_escape(inline_value);
+        if (resolved && *resolved)
+            key = xstrdup(resolved);
+    }
+    if (!key && file_spec && *file_spec) {
+        char *label = xasprintf("%s.api_key_file", config_prefix);
+        key = key_from_file(label, file_spec);
+        free(label);
+    }
+    if (!key && command && *command) {
+        char *label = xasprintf("%s.api_key_command", config_prefix);
+        key = key_from_command(label, command);
+        free(label);
+    }
+    if (!key && api_key_env) {
+        const char *env = getenv(api_key_env);
+        if (env && *env)
+            key = xstrdup(env);
+    }
+    if (!key)
         return NULL;
     trace_register_secret(key);
     return key;

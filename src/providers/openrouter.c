@@ -27,7 +27,7 @@
 #define MODEL_PROBE_TIMEOUT_S 5
 #define USAGE_TIMEOUT_S       30
 
-static const char *openrouter_api_key(void)
+static char *openrouter_api_key(void)
 {
     return provider_api_key("providers.openrouter", "OPENROUTER_API_KEY");
 }
@@ -167,13 +167,14 @@ int openrouter_probe_model(struct provider *provider, const char *model, struct 
     /* The whole listing, so its ids can serve /model completion. */
     probe->url = xstrdup(OPENROUTER_MODELS_ENDPOINT);
 
-    const char *api_key = openrouter_api_key();
+    char *api_key = openrouter_api_key();
     char *authorization = api_key ? xasprintf("Authorization: Bearer %s", api_key) : NULL;
     const char *fixed[] = {authorization, NULL};
     char **extra_headers = provider_extra_headers("providers.openrouter");
     probe->headers = string_array_concat(fixed, (const char *const *)extra_headers);
     string_array_free(extra_headers);
     free(authorization);
+    free(api_key);
     probe->timeout_s = MODEL_PROBE_TIMEOUT_S;
     probe->parse_entry = openrouter_parse_model;
     return 0;
@@ -240,13 +241,14 @@ out:
 int openrouter_query_usage(struct provider *provider)
 {
     (void)provider;
-    const char *api_key = openrouter_api_key();
+    char *api_key = openrouter_api_key();
     if (!api_key) {
         ui_error("no OpenRouter API key configured");
         return -1;
     }
 
     char *authorization = xasprintf("Authorization: Bearer %s", api_key);
+    free(api_key);
     const char *fixed[] = {authorization, "Accept: application/json", NULL};
     char **extra_headers = provider_extra_headers("providers.openrouter");
     char **headers = string_array_concat(fixed, (const char *const *)extra_headers);

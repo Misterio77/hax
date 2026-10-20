@@ -313,13 +313,14 @@ int llamacpp_probe_model(struct provider *provider, const char *model, struct mo
     if (!probe->url)
         return -1;
 
-    const char *api_key = provider_api_key("providers.llamacpp", NULL);
+    char *api_key = provider_api_key("providers.llamacpp", NULL);
     char *authorization = api_key ? xasprintf("Authorization: Bearer %s", api_key) : NULL;
     const char *fixed[] = {authorization, NULL};
     char **extra_headers = provider_extra_headers("providers.llamacpp");
     probe->headers = string_array_concat(fixed, (const char *const *)extra_headers);
     string_array_free(extra_headers);
     free(authorization);
+    free(api_key);
     probe->timeout_s = MODEL_METADATA_TIMEOUT_S;
     probe->parse = parse_props;
     return 0;
@@ -327,8 +328,10 @@ int llamacpp_probe_model(struct provider *provider, const char *model, struct mo
 
 int llamacpp_discover(const char *base_url, int *model_discovered)
 {
-    const char *api_key = provider_api_key("providers.llamacpp", NULL);
-    if (reconcile_configured_model(base_url, api_key, model_discovered) != 0) {
+    char *api_key = provider_api_key("providers.llamacpp", NULL);
+    int result = reconcile_configured_model(base_url, api_key, model_discovered);
+    free(api_key);
+    if (result != 0) {
         hax_err("llama.cpp: failed to auto-discover model from %s/models\n"
                 "hax: is llama-server running? "
                 "(set HAX_MODEL to skip probing, or adjust HAX_LLAMACPP_PORT / "
@@ -345,8 +348,9 @@ void llamacpp_prepare_availability(const struct provider_def *def,
     (void)def;
     char *base_url = resolve_base_url();
     char **extra_headers = provider_extra_headers("providers.llamacpp");
-    http_provider_prepare_base_url_availability(
-        base_url, provider_api_key("providers.llamacpp", NULL), extra_headers, out);
+    char *api_key = provider_api_key("providers.llamacpp", NULL);
+    http_provider_prepare_base_url_availability(base_url, api_key, extra_headers, out);
+    free(api_key);
     string_array_free(extra_headers);
     free(base_url);
 }
