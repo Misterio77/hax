@@ -13,9 +13,16 @@ struct input;
 struct input *input_new(void);
 void input_free(struct input *in);
 
-/* Return a malloc'd message, which may contain '\n'; return NULL on EOF or a
- * double Ctrl-C quit. Ctrl-C with text clears the buffer and editing continues. */
-char *input_readline(struct input *in, const char *prompt);
+enum input_result {
+    INPUT_LINE,
+    INPUT_EOF,
+    INPUT_ESCAPE,
+};
+
+/* INPUT_LINE sets *line to an owned message, which may contain '\n'. Other results set it
+ * to NULL. INPUT_ESCAPE is standalone Escape on an empty prompt; INPUT_EOF includes double
+ * Ctrl-C quit. Ctrl-C with text clears the buffer and editing continues. */
+enum input_result input_readline(struct input *in, const char *prompt, char **line);
 
 /* Add a non-empty line with erasedups semantics. When persistence is open, append it to
  * disk as well. */

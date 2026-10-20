@@ -242,6 +242,7 @@ static void apply_action(struct input *in, enum input_action a)
 {
     switch (a) {
     case INPUT_ACTION_NONE:
+    case INPUT_ACTION_ESCAPE:
         return;
     case INPUT_ACTION_MOVE_LEFT:
         input_core_move_left(in);
@@ -288,11 +289,6 @@ static void apply_action(struct input *in, enum input_action a)
         handle_bracketed_paste(in);
         return;
     }
-}
-
-static void handle_escape_sequence(struct input *in)
-{
-    apply_action(in, input_core_decode_escape(read_escape_byte, NULL));
 }
 
 /* ---------------- render / paint ---------------- */
@@ -1324,8 +1320,9 @@ void input_history_open_tty(struct input *in, const char *path, int persist)
 
 /* ---------------- public API ---------------- */
 
-char *input_readline(struct input *in, const char *prompt)
+enum input_result input_readline(struct input *in, const char *prompt, char **line)
 {
+    *line = NULL;
     if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO)) {
         /* Prevent a stale seed from reaching a later interactive read. */
         free(in->preseed);
@@ -1333,11 +1330,12 @@ char *input_readline(struct input *in, const char *prompt)
         size_t n;
         char *raw = read_line_canonical(&n);
         if (!raw)
-            return NULL;
+            return INPUT_EOF;
         char *clean = utf8_sanitize(raw, n);
         free(raw);
         trim_prompt(clean);
-        return clean;
+        *line = clean;
+        return INPUT_LINE;
     }
 
     in->prompt = prompt;
@@ -1368,8 +1366,9 @@ char *input_readline(struct input *in, const char *prompt)
 
     int submit = 0;
     int eof = 0;
+    int escaped = 0;
 
-    while (!submit && !eof) {
+    while (!submit && !eof && !escaped) {
         unsigned char c;
         int r = read_byte_blocking(&c);
         if (r <= 0) {
@@ -1471,9 +1470,12 @@ char *input_readline(struct input *in, const char *prompt)
             enable_raw_mode(in);
             refresh_terminal_size(in);
             break;
-        case 0x1b: /* ESC — start of escape sequence */
-            handle_escape_sequence(in);
+        case 0x1b: { /* ESC — terminal sequence or standalone key */
+            enum input_action action = input_core_decode_escape(read_escape_byte, NULL);
+            escaped = action == INPUT_ACTION_ESCAPE && in->len == 0;
+            apply_action(in, action);
             break;
+        }
         default:
             if (c >= 0x20) {
                 /* Time out malformed leaders because raw mode would consume Ctrl-C/D as
@@ -1495,20 +1497,23 @@ char *input_readline(struct input *in, const char *prompt)
             break;
         }
 
-        if (!eof && !submit)
+        if (!eof && !submit && !escaped)
             paint(in);
     }
 
     if (submit && in->len > 0)
         render_submitted(in);
-    else if (submit)
+    else if (submit || escaped)
         erase_edit_area(in);
     else
         leave_edit_area(in);
     disable_raw_mode(in);
 
+    if (escaped)
+        return INPUT_ESCAPE;
     if (eof && in->len == 0)
-        return NULL;
+        return INPUT_EOF;
     /* Jansson rejects malformed UTF-8, so normalize external input before returning it. */
-    return utf8_sanitize(in->buf, in->len);
+    *line = utf8_sanitize(in->buf, in->len);
+    return INPUT_LINE;
 }

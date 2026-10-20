@@ -121,7 +121,7 @@ The editor supports common readline-style movement and history keys. Notable hax
 | Shift-Enter | Insert a newline if the terminal sends LF for it. |
 | Up / Down | Recall previous/next prompts. |
 | Ctrl-R | Search prompt history. |
-| Esc | Pause after the current step so you can steer. |
+| Esc | While working, pause after the current step; at an empty prompt, open `/tree`. |
 | Esc Esc | Interrupt the model or running tool immediately. |
 | Ctrl-C | Clear the current prompt; twice on an empty prompt quits. |
 | Ctrl-D | Quit on an empty prompt. |
@@ -219,7 +219,8 @@ existing sessions or disable prompt recall.
 
 ### Conversation trees
 
-Run `/tree` at the prompt to browse conversation turns with their actual parent/child connectors.
+Run `/tree`, or press Escape at an empty prompt, to browse conversation turns
+with their actual parent/child connectors. Drafts are never replaced by the shortcut.
 Only the turn containing your current conversation position is marked:
 
 - **Enter** restores context through the selected turn's response, excluding later prompts.

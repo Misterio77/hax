@@ -265,7 +265,7 @@ static const struct shortcut SHORTCUTS[] = {
     {.key = "enter", .description = "submit prompt"},
     {.key = "shift-enter",
      .description = "insert newline (terminal must be configured to send LF)"},
-    {.key = "esc", .description = "pause after the current step to steer the model"},
+    {.key = "esc", .description = "pause work; open /tree on an empty prompt"},
     {.key = "esc esc", .description = "interrupt model or running tool immediately"},
     {.key = "ctrl-c", .description = "cancel current prompt line"},
     {.key = "ctrl-d", .description = "quit (on empty prompt)"},

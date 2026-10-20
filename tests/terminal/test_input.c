@@ -151,13 +151,15 @@ static void test_readline_piped_trims(void)
     close(fd);
 
     struct input *in = input_new();
-    char *line = input_readline(in, "> ");
+    char *line;
+    EXPECT(input_readline(in, "> ", &line) == INPUT_LINE);
     EXPECT_STR_EQ(line, "  hi");
     free(line);
-    line = input_readline(in, "> ");
+    EXPECT(input_readline(in, "> ", &line) == INPUT_LINE);
     EXPECT_STR_EQ(line, "");
     free(line);
-    EXPECT(input_readline(in, "> ") == NULL);
+    EXPECT(input_readline(in, "> ", &line) == INPUT_EOF);
+    EXPECT(line == NULL);
     input_free(in);
     free(path);
 }

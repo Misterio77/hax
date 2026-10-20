@@ -842,7 +842,7 @@ enum input_action input_core_decode_escape(input_byte_reader read, void *user)
 {
     int b = read(user);
     if (b < 0)
-        return INPUT_ACTION_NONE; /* bare ESC */
+        return INPUT_ACTION_ESCAPE;
 
     /* iTerm2's Esc+ mode prefixes Option cursor keys with another ESC. Bound stripping
      * prevents a stream of ESC bytes from monopolizing the decoder. */

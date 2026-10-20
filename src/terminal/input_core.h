@@ -226,6 +226,7 @@ int input_core_window_top(int prev_top, int cursor_row, int total_rows, int rows
 
 enum input_action {
     INPUT_ACTION_NONE = 0, /* unknown / abandoned (timeout, overflow) */
+    INPUT_ACTION_ESCAPE,   /* no byte follows the initial ESC */
     INPUT_ACTION_MOVE_LEFT,
     INPUT_ACTION_MOVE_RIGHT,
     INPUT_ACTION_MOVE_WORD_LEFT,

@@ -1145,7 +1145,10 @@ static void test_decode_paste_begin(void)
 
 static void test_decode_partial_and_unknown(void)
 {
-    EXPECT(decode("") == INPUT_ACTION_NONE);
+    EXPECT(decode("") == INPUT_ACTION_ESCAPE);
+    EXPECT(decode("\x1b") == INPUT_ACTION_NONE);
+    EXPECT(decode("[") == INPUT_ACTION_NONE);
+    EXPECT(decode("O") == INPUT_ACTION_NONE);
 
     EXPECT(decode("[1;5") == INPUT_ACTION_NONE);
 

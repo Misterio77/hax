@@ -96,6 +96,43 @@ def test_tree_edit_return_and_resume():
     resumed.wait_for("❯ alternate prompt")
 
 
+def test_escape_empty_prompt_and_escape_sequences():
+    term = harness.Terminal(
+        "text READY_REPLY\nend-turn", extra_env={"HAX_NO_SESSION": "0"}, size=(110, 32)
+    )
+    term.wait_for("❯")
+    term.type("seed prompt")
+    term.send("Enter")
+    term.wait_for("READY_REPLY")
+    term.wait_for("❯")
+    term.type("alpha beta")
+    # A harmless control key terminates any still-buffered escape sequence. The visible edit
+    # confirms processing without relying on timing sleeps before the next sequence.
+    term.send("Escape", "C-e")
+    term.type("!")
+    term.wait_for("❯ alpha beta!")
+    harness.expect("session tree · enter" not in term.screen(), "drafts block the shortcut")
+    term.send("BSpace", "Escape", "Left")
+    term.type("X")
+    term.wait_for("❯ alpha Xbeta")
+    term.send("C-e", "C-u")
+    term.send("Escape", "Up")
+    term.wait_for("❯ seed prompt")
+    harness.expect("session tree · enter" not in term.screen(), "prefixed arrow keys are preserved")
+    term.send("C-e", "C-u")
+    term.send("Escape")
+    term.wait_for("session tree · enter")
+    harness.expect("/tree" not in term.screen(), "Escape does not submit a synthetic command")
+    term.send("C-g")
+    term.type("cancelled draft")
+    term.wait_for("❯ cancelled draft")
+    harness.expect("session tree · enter" not in term.screen(), "cancelling returns to the editor")
+    term.send("C-u", "Escape")
+    term.wait_for("session tree · enter")
+    term.send("e")
+    term.wait_for("❯ seed prompt")
+
+
 def test_tree_requires_recording():
     term = harness.Terminal("text hello\nend-turn")
     term.wait_for("❯")

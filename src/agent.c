@@ -27,6 +27,7 @@
 #include "slash.h"
 #include "transcript.h"
 #include "xalloc.h"
+#include "commands/tree.h"
 #include "render/disp.h"
 #include "render/markdown.h"
 #include "render/render_ctx.h"
@@ -1100,15 +1101,8 @@ static char *slash_hint_cb(const char *buf, void *user)
     return slash_hint(buf);
 }
 
-static int handle_slash_input(struct input *input, struct agent_state *state, const char *line)
+static void apply_pending_input(struct input *input, struct agent_state *state)
 {
-    if (!*line)
-        return 0;
-
-    if (slash_dispatch(line, state) == SLASH_NOT_A_COMMAND)
-        return 0;
-
-    input_history_add_session(input, line);
     if (state->pending_recall) {
         input_history_add_session(input, state->pending_recall);
         free(state->pending_recall);
@@ -1119,6 +1113,18 @@ static int handle_slash_input(struct input *input, struct agent_state *state, co
         free(state->pending_preseed);
         state->pending_preseed = NULL;
     }
+}
+
+static int handle_slash_input(struct input *input, struct agent_state *state, const char *line)
+{
+    if (!*line)
+        return 0;
+
+    if (slash_dispatch(line, state) == SLASH_NOT_A_COMMAND)
+        return 0;
+
+    input_history_add_session(input, line);
+    apply_pending_input(input, state);
     return 1;
 }
 
@@ -1228,9 +1234,16 @@ int agent_run(struct provider **provider_io, const struct hax_opts *options)
         cursor_show();
         /* Rebuilt each iteration so a runtime theme change (/config theme …)
          * recolors the prompt instead of keeping the startup theme's bytes. */
-        char *line = input_readline(input, build_prompt(prompt_buffer, sizeof(prompt_buffer)));
+        char *line;
+        enum input_result result =
+            input_readline(input, build_prompt(prompt_buffer, sizeof(prompt_buffer)), &line);
         cursor_hide();
-        if (!line) {
+        if (result == INPUT_ESCAPE) {
+            tree_command(&state);
+            apply_pending_input(input, &state);
+            continue;
+        }
+        if (result == INPUT_EOF) {
             putchar('\n');
             break;
         }
