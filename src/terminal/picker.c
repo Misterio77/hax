@@ -619,14 +619,17 @@ static enum picker_input_result process_input_byte(struct picker_core *core, uns
      * fzf. */
     if (byte == 0x0d)
         return core->match_count ? PICKER_INPUT_ACCEPT : PICKER_INPUT_CONTINUE;
-    if (core->options->alternate_key && byte == '/' && core->query.len == 0 &&
+    const char *alternate_keys = core->options->alternate_keys;
+    if (alternate_keys && *alternate_keys && byte == '/' && core->query.len == 0 &&
         !core->explicit_search) {
         core->explicit_search = 1;
         return PICKER_INPUT_CONTINUE;
     }
-    if (core->options->alternate_key && byte == core->options->alternate_key &&
-        core->query.len == 0 && !core->explicit_search)
+    if (alternate_keys && byte && strchr(alternate_keys, byte) && core->query.len == 0 &&
+        !core->explicit_search) {
+        core->alternate_key = byte;
         return core->match_count ? PICKER_INPUT_ALTERNATE : PICKER_INPUT_CONTINUE;
+    }
     if (byte == 0x7f || byte == 0x08) { /* Backspace */
         picker_core_truncate_query(core, utf8_prev(core->query.data, core->query.len));
         return PICKER_INPUT_CONTINUE;
@@ -652,8 +655,11 @@ static enum picker_input_result process_input_byte(struct picker_core *core, uns
         unsigned char next_byte;
         if (read_byte_timeout(&next_byte, ESC_TIMEOUT_MS) <= 0)
             return PICKER_INPUT_CANCEL;
-        if (core->options->alternate_key && next_byte == core->options->alternate_key)
+        if (core->options->alternate_keys && next_byte &&
+            strchr(core->options->alternate_keys, next_byte)) {
+            core->alternate_key = next_byte;
             return core->match_count ? PICKER_INPUT_ALTERNATE : PICKER_INPUT_CONTINUE;
+        }
         struct escape_reader reader = {.pending_byte = next_byte};
         enum input_action action = input_core_decode_escape(read_escape_byte, &reader);
         apply_escape_action(core, action);
@@ -678,8 +684,8 @@ static enum picker_input_result process_input_byte(struct picker_core *core, uns
 
 long picker_run(const struct picker_opts *options)
 {
-    if (options && options->alternate_selected)
-        *options->alternate_selected = 0;
+    if (options && options->alternate_chosen)
+        *options->alternate_chosen = 0;
     if (!options || !isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO))
         return -1;
     if (options->item_count == 0) {
@@ -724,8 +730,8 @@ long picker_run(const struct picker_opts *options)
         if (input_result == PICKER_INPUT_CANCEL)
             break;
         if (input_result == PICKER_INPUT_ACCEPT || input_result == PICKER_INPUT_ALTERNATE) {
-            if (options->alternate_selected)
-                *options->alternate_selected = input_result == PICKER_INPUT_ALTERNATE;
+            if (options->alternate_chosen)
+                *options->alternate_chosen = picker.core.alternate_key;
             result = (long)picker.core.matches[picker.core.selection];
             break;
         }

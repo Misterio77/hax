@@ -83,6 +83,23 @@ int session_tree_navigate(struct session_tree *tree, size_t position)
     return 0;
 }
 
+size_t session_tree_departing_count(const struct session_tree *tree, size_t target)
+{
+    unsigned char *shared = xcalloc(tree->count ? tree->count : 1, sizeof(*shared));
+    size_t target_leaf = target == 0 ? SIZE_MAX : find_position(tree, target);
+    for (size_t i = target_leaf; i != SIZE_MAX; i = tree->nodes[i].parent)
+        shared[i] = 1;
+
+    size_t departing = 0;
+    for (size_t i = find_position(tree, tree->position); i != SIZE_MAX; i = tree->nodes[i].parent) {
+        if (shared[i])
+            break;
+        departing++;
+    }
+    free(shared);
+    return departing;
+}
+
 void session_tree_undo(struct session_tree *tree, size_t keep_user_turns)
 {
     size_t leaf = find_position(tree, tree->position);

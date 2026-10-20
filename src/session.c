@@ -189,10 +189,15 @@ static const struct {
     enum item_origin origin;
     const char *name;
 } ORIGIN_NAMES[] = {
-    {ITEM_ORIGIN_COMPACT_SEED, "compact_seed"}, {ITEM_ORIGIN_CONTINUATION, "continuation"},
-    {ITEM_ORIGIN_INTERRUPTED, "interrupted"},   {ITEM_ORIGIN_SKIPPED, "skipped"},
-    {ITEM_ORIGIN_REFUSED, "refused"},           {ITEM_ORIGIN_SUMMARIZED, "summarized"},
-    {ITEM_ORIGIN_TASK_NOTE, "task_note"},       {ITEM_ORIGIN_COMPACTION, "compaction"},
+    {ITEM_ORIGIN_COMPACT_SEED, "compact_seed"},
+    {ITEM_ORIGIN_CONTINUATION, "continuation"},
+    {ITEM_ORIGIN_INTERRUPTED, "interrupted"},
+    {ITEM_ORIGIN_SKIPPED, "skipped"},
+    {ITEM_ORIGIN_REFUSED, "refused"},
+    {ITEM_ORIGIN_SUMMARIZED, "summarized"},
+    {ITEM_ORIGIN_TASK_NOTE, "task_note"},
+    {ITEM_ORIGIN_COMPACTION, "compaction"},
+    {ITEM_ORIGIN_BRANCH_SUMMARY, "branch_summary"},
 };
 
 static const char *origin_to_str(enum item_origin origin)
@@ -1142,16 +1147,14 @@ static void apply_user_turn_record(struct session_loaded *loaded, const json_t *
     loaded->worked_ms += loaded->last_user_turn_ms;
 }
 
-static int load_session(const char *path, const size_t *position, struct session_loaded *out)
+/* Replays every record into `tree` and the file-level fields of `out`. Leaves selection alone:
+ * callers decide whether to navigate the tree before exporting it. */
+static int replay_session(const char *path, struct session_tree *tree, struct session_loaded *out)
 {
-    memset(out, 0, sizeof(*out));
-    out->last_user_turn_ms = -1;
-
     FILE *file = open_session_reader(path);
     if (!file)
         return -1;
 
-    struct session_tree tree = {0};
     size_t record = 0;
     int invalid_record = 0;
     char *header_provider = NULL;
@@ -1188,13 +1191,13 @@ static int load_session(const char *path, const size_t *position, struct session
             } else if (strcmp(type, "undo") == 0) {
                 json_t *value = json_object_get(object, "keep_user_turns");
                 if (json_is_integer(value) && json_integer_value(value) >= 0) {
-                    session_tree_undo(&tree, (size_t)json_integer_value(value));
+                    session_tree_undo(tree, (size_t)json_integer_value(value));
                     out->last_user_turn_ms = -1;
                 }
             } else if (strcmp(type, "navigate") == 0) {
                 json_t *value = json_object_get(object, "position");
                 if (!json_is_integer(value) || json_integer_value(value) < 0 ||
-                    session_tree_navigate(&tree, (size_t)json_integer_value(value)) != 0) {
+                    session_tree_navigate(tree, (size_t)json_integer_value(value)) != 0) {
                     invalid_record = 1;
                     json_decref(object);
                     break;
@@ -1216,7 +1219,7 @@ static int load_session(const char *path, const size_t *position, struct session
                 if (!item.model && header_model)
                     item.model = xstrdup(header_model);
             }
-            session_tree_append(&tree, record, item);
+            session_tree_append(tree, record, item);
         }
         json_decref(object);
     }
@@ -1226,7 +1229,16 @@ static int load_session(const char *path, const size_t *position, struct session
     fclose(file);
     free(header_provider);
     free(header_model);
-    if (read_failed || invalid_record ||
+    return read_failed || invalid_record ? -1 : 0;
+}
+
+static int load_session(const char *path, const size_t *position, struct session_loaded *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->last_user_turn_ms = -1;
+
+    struct session_tree tree = {0};
+    if (replay_session(path, &tree, out) != 0 ||
         (position && session_tree_navigate(&tree, *position) != 0)) {
         session_tree_free(&tree);
         session_loaded_free(out);
@@ -1241,6 +1253,40 @@ static int load_session(const char *path, const size_t *position, struct session
     /* Providers reject tool calls that lack a corresponding result after a crash. */
     out->n_items = remove_incomplete_tool_calls(out->items, out->n_items);
     degrade_excess_images(out->items, out->n_items);
+    return 0;
+}
+
+int session_load_departing(const char *path, size_t target, struct item **out_items,
+                           size_t *out_count)
+{
+    *out_items = NULL;
+    *out_count = 0;
+
+    struct session_loaded loaded;
+    memset(&loaded, 0, sizeof(loaded));
+    loaded.last_user_turn_ms = -1;
+    struct session_tree tree = {0};
+    if (replay_session(path, &tree, &loaded) != 0) {
+        session_tree_free(&tree);
+        session_loaded_free(&loaded);
+        return -1;
+    }
+    size_t departing = session_tree_departing_count(&tree, target);
+    session_tree_export(&tree, &loaded);
+    session_tree_free(&tree);
+    loaded.n_items = remove_incomplete_tool_calls(loaded.items, loaded.n_items);
+    /* Repair can drop an interrupted call, leaving fewer items than the path counted. */
+    if (departing > loaded.n_items)
+        departing = loaded.n_items;
+    if (departing > 0) {
+        *out_items = xmalloc(departing * sizeof(**out_items));
+        memcpy(*out_items, &loaded.items[loaded.n_items - departing],
+               departing * sizeof(**out_items));
+        memset(&loaded.items[loaded.n_items - departing], 0, departing * sizeof(*loaded.items));
+        loaded.n_items -= departing;
+        *out_count = departing;
+    }
+    session_loaded_free(&loaded);
     return 0;
 }
 

@@ -843,7 +843,10 @@ void agent_fork(struct agent_state *state, size_t turn_index)
     reshape_after_cut(state, cut_index, turn_index, "forked", 0);
 }
 
-int agent_navigate_tree(struct agent_state *state, size_t position, const char *prompt, int edit)
+static int summarize_departing_branch(struct agent_state *state, size_t position, char **out);
+
+int agent_navigate_tree(struct agent_state *state, size_t position, const char *prompt,
+                        enum agent_tree_action action)
 {
     struct task_info *tasks;
     size_t task_count = task_list(&tasks);
@@ -861,22 +864,42 @@ int agent_navigate_tree(struct agent_state *state, size_t position, const char *
 
     struct agent_session *session = state->session;
     agent_flush_logs(state->transcript, state->session_log, session->items, session->n_items);
+    /* Summarizing reads the branch that is about to be left, so it happens first: a failure or a
+     * cancel leaves the conversation on it. */
+    char *summary = NULL;
+    if (action == AGENT_TREE_SUMMARIZE &&
+        summarize_departing_branch(state, position, &summary) != 0)
+        return -1;
     struct session_loaded loaded;
     if (session_load_at(session_log_path(state->session_log), position, &loaded) != 0) {
+        free(summary);
         ui_error("could not read the selected branch; conversation left unchanged");
         disp_sync_external_line(&state->render->disp);
         return -1;
     }
     if (session_log_navigate(state->session_log, position, loaded.n_items) != 0) {
         session_loaded_free(&loaded);
+        free(summary);
         ui_error("could not record the branch switch; conversation left unchanged");
         disp_sync_external_line(&state->render->disp);
         return -1;
     }
 
+    int edit = action == AGENT_TREE_EDIT;
     char *label = prompt ? xstrdup(prompt) : NULL;
     agent_session_adopt(session, &loaded);
     session_loaded_free(&loaded);
+    /* The summary belongs to the destination, not to the branch it describes: appended here, it
+     * is context the continuing conversation reads rather than a seed that hides the history. */
+    if (summary) {
+        agent_session_append(session, (struct item){
+                                          .kind = ITEM_USER_MESSAGE,
+                                          .text = compact_branch_seed(summary),
+                                          .origin = ITEM_ORIGIN_BRANCH_SUMMARY,
+                                      });
+        session_log_append(state->session_log, session->items, session->n_items);
+        free(summary);
+    }
     clear_resume_state(state);
     if (!edit) {
         enum agent_resume_tail tail = agent_session_resume_tail(session);
@@ -898,6 +921,8 @@ int agent_navigate_tree(struct agent_state *state, size_t position, const char *
                     edit ? "before" : "after", preview);
     else
         disp_printf(&state->render->disp, "switched conversation position · ctrl-o for history");
+    if (action == AGENT_TREE_SUMMARIZE)
+        disp_printf(&state->render->disp, " · summarized branch left behind");
     disp_write_ansi(&state->render->disp, ANSI_RESET);
     disp_putc(&state->render->disp, '\n');
     disp_flush(&state->render->disp);
@@ -933,6 +958,57 @@ static void compact_notice(struct render_ctx *render, const char *format, ...)
     disp_write_ansi(&render->disp, ANSI_RESET);
     disp_putc(&render->disp, '\n');
     disp_flush(&render->disp);
+}
+
+/* Summarize what navigating to `position` leaves behind. Returns 0 on success — including when the
+ * target lies ahead on this path and nothing is abandoned — and -1 when the request failed or was
+ * cancelled, in which case the conversation stays on the branch it is on. */
+static int summarize_departing_branch(struct agent_state *state, size_t position, char **out)
+{
+    struct agent_session *session = state->session;
+    struct item *departing = NULL;
+    size_t n_departing = 0;
+    if (session_load_departing(session_log_path(state->session_log), position, &departing,
+                               &n_departing) != 0) {
+        ui_error("could not read the branch being left; conversation left unchanged");
+        disp_sync_external_line(&state->render->disp);
+        return -1;
+    }
+    if (n_departing == 0) {
+        free(departing);
+        return 0;
+    }
+
+    struct render_ctx *render = state->render;
+    render_set_mode(render, RENDER_IDLE);
+    render_stream_begin(render);
+    spinner_set_label(render->spinner, "summarizing", "summarizing branch...");
+    struct compact_params params = {
+        .session = session,
+        .provider = state->provider,
+        .session_log = state->session_log,
+        .transcript_log = state->transcript,
+        .hooks =
+            {
+                .user = render,
+                .tick = compact_tick,
+                .is_cancelled = compact_cancelled,
+            },
+    };
+    interrupt_clear_requests();
+    interrupt_arm();
+    char *summary = compact_summarize_branch(&params, departing, n_departing, NULL);
+    interrupt_disarm();
+    for (size_t i = 0; i < n_departing; i++)
+        item_free(&departing[i]);
+    free(departing);
+    render_set_mode(render, RENDER_IDLE);
+    if (!summary) {
+        compact_notice(render, "branch not summarized; conversation left unchanged");
+        return -1;
+    }
+    *out = summary;
+    return 0;
 }
 
 int agent_compact(struct agent_state *state, const char *instructions, int automatic)

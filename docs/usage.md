@@ -84,7 +84,7 @@ Type `/help` for the authoritative live list.
 | `/new [preset]` | Start a fresh conversation, optionally with a preset. `/clear` is an alias. |
 | `/resume` | Pick a past session for this directory. |
 | `/fork [n]` | Create a new session before an earlier prompt; `/fork 0` clones the current tip. |
-| `/tree` | Browse conversation turns; Enter continues, e edits a prompt. |
+| `/tree` | Browse conversation turns; Enter continues, e edits a prompt, s summarizes and switches. |
 | `/undo [n]` | Roll the conversation back to before an earlier prompt. |
 | `/provider [id]` | Switch provider. |
 | `/model [id]` | Switch the current provider's model. |
@@ -227,8 +227,12 @@ Only the turn containing your current conversation position is marked:
   Continue with a new message without rerunning that turn.
 - **e** restores context before the selected prompt and puts its original text in the editor.
   Edit and send it to create another branch without deleting the original continuation.
-- Type to filter. **/** starts explicit search, including queries beginning with `e`.
-  **Alt-E** edits while filtering; **Ctrl-U** clears the search. Escape cancels the picker.
+- **s** summarizes the branch you are leaving and continues at the selected turn, so what it
+  learned is still available. One summarization request runs before the switch; if it fails or you
+  interrupt it, the conversation stays where it was.
+- Type to filter. **/** starts explicit search, including queries beginning with `e` or `s`.
+  **Alt-E** and **Alt-S** act while filtering; **Ctrl-U** clears the search. Escape cancels the
+  picker.
 
 Rows represent turns, not individual tool calls. Intermediate turns are valid continuation points,
 not only branch endpoints. No synthetic branch-tip rows or assistant previews are shown.
@@ -240,8 +244,10 @@ an independent file; `/tree` shows only the history in the current file.
 Switching prints a short marker and leaves terminal scrollback alone. Old output can therefore
 belong to a branch the model no longer sees: Ctrl-O shows the selected conversation, and Ctrl-T
 shows its model-facing context. Compaction summaries follow their own branch, not its siblings.
-There are no branch summaries or workspace rollbacks: file edits and command side effects are not
-undone. Provider, model, effort, and preset remain at their current settings.
+Nothing is rolled back: file edits and command side effects are not undone, and neither provider,
+model, effort, nor preset changes. A branch summary written by **s** is appended where you land and
+says so — it reports what that branch explored, learned, and left running, and warns that none of it
+is the current state.
 
 Navigation requires session recording and no running or uncollected background tasks. Collect
 outstanding tasks before switching, or stop them with `/tasks kill` and let the agent collect their

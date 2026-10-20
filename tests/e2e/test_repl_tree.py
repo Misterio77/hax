@@ -96,6 +96,51 @@ def test_tree_edit_return_and_resume():
     resumed.wait_for("❯ alternate prompt")
 
 
+def test_tree_summarize_carries_the_abandoned_branch():
+    home, workdir = harness.make_home()
+    pager = home / "pager.txt"
+    env = {"HAX_NO_SESSION": "0", "PAGER": f"cat > {shlex.quote(str(pager))}"}
+    term = harness.Terminal(
+        """
+        text FIRST_REPLY
+        end-turn
+        text SECOND_REPLY
+        end-turn
+        text SUMMARY_BODY
+        end-turn
+        """,
+        home=home,
+        workdir=workdir,
+        extra_env=env,
+        size=(110, 44),
+    )
+    term.wait_for("❯")
+    term.type("first prompt")
+    term.send("Enter")
+    term.wait_for("FIRST_REPLY")
+    term.type("second prompt")
+    term.send("Enter")
+    term.wait_for("SECOND_REPLY")
+
+    term.type("/tree")
+    term.send("Enter")
+    term.wait_for("session tree · enter")
+    harness.expect("s summarize" in term.screen(), "the tree offers summarize and switch")
+    term.send("Up", "s")
+    term.wait_for("summarized branch left behind")
+    harness.expect("SUMMARY_BODY" not in term.screen(), "the summary itself is not echoed")
+
+    term.send("C-o")
+    term.wait_for("❯")
+    history = pager.read_text()
+    harness.expect("FIRST_REPLY" in history, "the destination keeps its own turn")
+    harness.expect("SECOND_REPLY" not in history, "the abandoned branch is not model-visible")
+    harness.expect("summarized branch left behind" in history, "the summary is carried as context")
+
+    term.send("C-d")
+    harness.expect(term.wait_exit() == 0, "exit after summarizing a branch")
+
+
 def test_escape_empty_prompt_and_escape_sequences():
     term = harness.Terminal(
         "text READY_REPLY\nend-turn", extra_env={"HAX_NO_SESSION": "0"}, size=(110, 32)

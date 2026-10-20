@@ -22,6 +22,11 @@ struct session_tree {
 void session_tree_append(struct session_tree *tree, size_t record, struct item item);
 void session_tree_undo(struct session_tree *tree, size_t keep_user_turns);
 
+/* Number of items at the end of the selected path that a navigation to `target` would leave behind:
+ * everything below the last item it shares with the target path. Zero when the target is already on
+ * the selected path. */
+size_t session_tree_departing_count(const struct session_tree *tree, size_t target);
+
 /* Select an existing item record, or zero for the root. Invalid targets leave tree unchanged. */
 int session_tree_navigate(struct session_tree *tree, size_t position);
 

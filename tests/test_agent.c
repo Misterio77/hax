@@ -15,6 +15,7 @@
 #include "session.h"
 #include "xalloc.h"
 #include "render/render_ctx.h"
+#include "transport/http.h"
 
 /* ---------- agent_apply_settings: banner / marker split ---------- */
 
@@ -776,14 +777,139 @@ struct navigation_call {
     struct agent_state *state;
     size_t position;
     const char *prompt;
-    int edit;
+    enum agent_tree_action action;
     int result;
 };
 
 static void do_navigation(void *user)
 {
     struct navigation_call *call = user;
-    call->result = agent_navigate_tree(call->state, call->position, call->prompt, call->edit);
+    call->result = agent_navigate_tree(call->state, call->position, call->prompt, call->action);
+}
+
+static int tree_stream(struct provider *provider, const struct context *context, const char *model,
+                       stream_cb callback, void *user, http_tick_cb tick, void *tick_user)
+{
+    (void)provider;
+    (void)context;
+    (void)model;
+    (void)tick;
+    (void)tick_user;
+    struct stream_event text = {.kind = EV_TEXT_DELTA,
+                                .u.text_delta = {.text = "## Explored\n- the parser"}};
+    callback(&text, user);
+    struct stream_usage usage = {.input_tokens = 40,
+                                 .output_tokens = 9,
+                                 .cached_tokens = -1,
+                                 .cache_write_tokens = -1,
+                                 .cache_write_1h_tokens = -1,
+                                 .cost = -1};
+    struct stream_event done = {.kind = EV_DONE, .u.done = {.usage = usage}};
+    callback(&done, user);
+    return 0;
+}
+
+static int tree_stream_fails(struct provider *provider, const struct context *context,
+                             const char *model, stream_cb callback, void *user, http_tick_cb tick,
+                             void *tick_user)
+{
+    (void)provider;
+    (void)context;
+    (void)model;
+    (void)tick;
+    (void)tick_user;
+    struct stream_event error = {.kind = EV_ERROR,
+                                 .u.error = {.message = "branch failed", .usage = NULL}};
+    callback(&error, user);
+    return 0;
+}
+
+/* Summarizing the branch being left happens before the switch, and what it produces belongs to the
+ * destination: appended after the selected position, not wrapped around it. */
+static void test_tree_summarize_attaches_summary_at_destination(void)
+{
+    set_state_dir();
+    struct fixture f;
+    fixture_init(&f);
+    add_turn(&f.session, "first", "first reply");
+    add_turn(&f.session, "second", "do not replay this reply");
+    f.state.session_log = session_log_open("prov-x", "model-a", NULL, NULL, NULL);
+    session_log_append(f.state.session_log, f.session.items, f.session.n_items);
+    char *path = xstrdup(session_log_path(f.state.session_log));
+    f.provider.stream = tree_stream;
+
+    struct session_loaded loaded;
+    EXPECT(session_load_all(path, &loaded) == 0);
+    size_t position = loaded.tree[0].after_position;
+    session_loaded_free(&loaded);
+
+    struct navigation_call call = {
+        .state = &f.state,
+        .position = position,
+        .prompt = "first",
+        .action = AGENT_TREE_SUMMARIZE,
+    };
+    char *out = t_capture_stdout(do_navigation, &call);
+    EXPECT(call.result == 0);
+    EXPECT(agent_user_turn_count(&f.session) == 1);
+    EXPECT(f.session.n_items == 4);
+    const struct item *summary = &f.session.items[f.session.n_items - 1];
+    EXPECT(summary->kind == ITEM_USER_MESSAGE && summary->origin == ITEM_ORIGIN_BRANCH_SUMMARY);
+    EXPECT(summary->text && strstr(summary->text, "no longer the current state") != NULL);
+    EXPECT(summary->text && strstr(summary->text, "the parser") != NULL);
+    EXPECT(strstr(out, "summarized branch left behind") != NULL);
+    /* The summary reads as context, not as a prompt awaiting an answer. */
+    EXPECT(agent_session_resume_tail(&f.session) == AGENT_RESUME_TAIL_CLEAN);
+    free(out);
+
+    EXPECT(session_load_all(path, &loaded) == 0);
+    EXPECT(loaded.n_items == 4);
+    EXPECT(loaded.items[3].origin == ITEM_ORIGIN_BRANCH_SUMMARY);
+    /* The abandoned turn and the summarization's own usage footer stay on the branch. */
+    EXPECT(loaded.n_retired > 3);
+    session_loaded_free(&loaded);
+    session_log_close(f.state.session_log);
+    free(path);
+    fixture_free(&f);
+}
+
+/* A failed summarization changes nothing: the conversation stays on the branch it was on. */
+static void test_tree_summarize_failure_keeps_position(void)
+{
+    set_state_dir();
+    struct fixture f;
+    fixture_init(&f);
+    add_turn(&f.session, "first", "first reply");
+    add_turn(&f.session, "second", "do not replay this reply");
+    f.state.session_log = session_log_open("prov-x", "model-a", NULL, NULL, NULL);
+    session_log_append(f.state.session_log, f.session.items, f.session.n_items);
+    char *path = xstrdup(session_log_path(f.state.session_log));
+    f.provider.stream = tree_stream_fails;
+
+    struct session_loaded loaded;
+    EXPECT(session_load_all(path, &loaded) == 0);
+    size_t position = loaded.tree[0].after_position;
+    session_loaded_free(&loaded);
+
+    struct navigation_call call = {
+        .state = &f.state,
+        .position = position,
+        .prompt = "first",
+        .action = AGENT_TREE_SUMMARIZE,
+    };
+    char *out = t_capture_stdout(do_navigation, &call);
+    EXPECT(call.result == -1);
+    EXPECT(agent_user_turn_count(&f.session) == 2);
+    EXPECT(strstr(out, "left unchanged") != NULL);
+    free(out);
+
+    EXPECT(session_load_all(path, &loaded) == 0);
+    EXPECT(loaded.n_items == 6);
+    EXPECT(loaded.n_retired == 0);
+    session_loaded_free(&loaded);
+    session_log_close(f.state.session_log);
+    free(path);
+    fixture_free(&f);
 }
 
 static void test_tree_navigation_stages_draft_without_replaying(void)
@@ -806,7 +932,7 @@ static void test_tree_navigation_stages_draft_without_replaying(void)
         .state = &f.state,
         .position = position,
         .prompt = agent_user_turn_text(&f.session, 1),
-        .edit = 1,
+        .action = AGENT_TREE_EDIT,
     };
     char *out = t_capture_stdout(do_navigation, &call);
     EXPECT(call.result == 0);
@@ -886,6 +1012,8 @@ int main(void)
 {
     /* Outside any repository, so recorded sessions neither run git nor depend on the checkout. */
     EXPECT(chdir(t_tempdir()) == 0);
+    test_tree_summarize_attaches_summary_at_destination();
+    test_tree_summarize_failure_keeps_position();
     test_tree_navigation_stages_draft_without_replaying();
     test_tree_navigation_failure_leaves_history_unchanged();
     test_tree_continue_after_ancestor_excludes_its_descendants();

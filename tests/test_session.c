@@ -933,6 +933,59 @@ static void test_fork_writes_prefix_as_inherited_without_touching_source(void)
     free(source_path);
 }
 
+/* What a switch abandons is the selected path below its last shared item; the selection itself is
+ * untouched, so the caller can still describe or discard the branch. */
+static void test_load_departing_collects_the_abandoned_tail(void)
+{
+    use_fresh_session_state();
+    struct item conversation[] = {
+        {.kind = ITEM_TURN_BOUNDARY},
+        {.kind = ITEM_USER_MESSAGE, .text = (char *)"first"},
+        {.kind = ITEM_ASSISTANT_MESSAGE, .text = (char *)"r1"},
+        {.kind = ITEM_TURN_BOUNDARY},
+        {.kind = ITEM_USER_MESSAGE, .text = (char *)"second"},
+        {.kind = ITEM_ASSISTANT_MESSAGE, .text = (char *)"r2"},
+    };
+    size_t count = sizeof(conversation) / sizeof(conversation[0]);
+    char *path = write_session("pa", "ma", NULL, NULL, conversation, count);
+    struct session_loaded loaded;
+    EXPECT(session_load_all(path, &loaded) == 0);
+    EXPECT(loaded.n_tree == 2);
+    size_t before_second = loaded.tree[1].position;
+    size_t after_second = loaded.tree[1].after_position;
+    size_t after_first = loaded.tree[0].after_position;
+    session_loaded_free(&loaded);
+
+    struct item *items = NULL;
+    size_t n = 0;
+    EXPECT(session_load_departing(path, after_first, &items, &n) == 0);
+    EXPECT(n == 3);
+    if (n == 3) {
+        EXPECT(items[0].kind == ITEM_TURN_BOUNDARY);
+        EXPECT_STR_EQ(items[1].text, "second");
+        EXPECT_STR_EQ(items[2].text, "r2");
+    }
+    free_items(items, n);
+
+    /* Selecting forward on the same path abandons nothing. */
+    items = NULL;
+    n = 0;
+    EXPECT(session_load_departing(path, after_second, &items, &n) == 0);
+    EXPECT(n == 0);
+
+    /* Editing the newest prompt abandons that prompt and its response. */
+    EXPECT(session_load_departing(path, before_second, &items, &n) == 0);
+    EXPECT(n == 3);
+    free_items(items, n);
+
+    /* Reading the branch leaves the recorded selection where it was. */
+    EXPECT(session_load_all(path, &loaded) == 0);
+    EXPECT(loaded.n_items == 6);
+    EXPECT(loaded.n_retired == 0);
+    session_loaded_free(&loaded);
+    free(path);
+}
+
 /* A kept count says where a seed sits in its own file. A fork writes the live conversation, which
  * is already summary-first, so carrying the count over would move the summarized prefix's tail
  * behind the seed instead. */
@@ -1368,6 +1421,7 @@ int main(void)
     test_user_turn_records_sum_worked_time();
     test_fork_writes_prefix_as_inherited_without_touching_source();
     test_fork_drops_kept_seed_count();
+    test_load_departing_collects_the_abandoned_tail();
     test_selection_metadata_tracks_productive_switches();
     test_discarded_selection_stays_out_of_log();
     test_undo_keeps_effective_selection();

@@ -36,6 +36,9 @@ enum item_origin {
     ITEM_ORIGIN_SUMMARIZED,   /* TOOL_RESULT standing in for separately displayed output */
     ITEM_ORIGIN_TASK_NOTE,    /* synthetic USER_MESSAGE reporting finished background tasks */
     ITEM_ORIGIN_COMPACTION,   /* TURN_USAGE of a summarization request, not an agent turn */
+    /* synthetic USER_MESSAGE carrying what a left-behind branch tried; it is context about the
+     * past, not a part of the conversation that ran here. */
+    ITEM_ORIGIN_BRANCH_SUMMARY,
 };
 
 /* One inline image carried by an item: base64 payload plus the metadata

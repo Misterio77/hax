@@ -427,9 +427,10 @@ enum agent_resume_tail agent_session_resume_tail(const struct agent_session *ses
             continue;
         if (item->origin == ITEM_ORIGIN_INTERRUPTED || item->origin == ITEM_ORIGIN_SKIPPED)
             return AGENT_RESUME_TAIL_MARKED;
-        /* A compaction seed is synthetic: the response it awaits is a fresh turn, not an
-         * answer to recorded user input. */
-        if (item->kind == ITEM_USER_MESSAGE && item->origin != ITEM_ORIGIN_COMPACT_SEED)
+        /* A compaction seed or a branch summary is synthetic: both are context for what the
+         * conversation does next, not input waiting on an answer. */
+        if (item->kind == ITEM_USER_MESSAGE && item->origin != ITEM_ORIGIN_COMPACT_SEED &&
+            item->origin != ITEM_ORIGIN_BRANCH_SUMMARY)
             return AGENT_RESUME_TAIL_USER;
         return AGENT_RESUME_TAIL_CLEAN;
     }

@@ -71,6 +71,7 @@ struct mock_state {
     int cancel_requested;
     int observed_events;
     size_t last_request_items;
+    char last_prompt[2048]; /* newest user message the request carried */
 };
 
 static struct mock_state mock;
@@ -140,6 +141,13 @@ static int mock_stream(struct provider *provider, const struct context *ctx, con
     (void)tick_user;
     EXPECT(ctx != NULL);
     mock.last_request_items = ctx->n_items;
+    mock.last_prompt[0] = '\0';
+    for (size_t i = ctx->n_items; i-- > 0;) {
+        if (ctx->items[i].kind != ITEM_USER_MESSAGE || !ctx->items[i].text)
+            continue;
+        snprintf(mock.last_prompt, sizeof(mock.last_prompt), "%s", ctx->items[i].text);
+        break;
+    }
     mock.stream_calls++;
 
     if ((mock.script == MOCK_RETRY_ONCE && mock.stream_calls == 1) ||
@@ -623,6 +631,94 @@ static void test_kept_tail_survives_reload(void)
     agent_session_free(&resumed);
 }
 
+/* A branch summary is a report about work that is not the current conversation, so it must not
+ * append a seed or otherwise reshape the window it was asked from. */
+static void test_branch_summary_leaves_history_alone(void)
+{
+    struct agent_session session;
+    init_session(&session);
+    struct provider provider = {.name = "test", .stream = mock_stream};
+    struct item departing[] = {
+        {.kind = ITEM_USER_MESSAGE, .text = xstrdup("explore the parser")},
+        {.kind = ITEM_ASSISTANT_MESSAGE, .text = xstrdup("it lives in parse.c")},
+    };
+    reset_mock(MOCK_SUCCESS);
+
+    int attempts = 0;
+    char *summary = compact_summarize_branch(
+        &(struct compact_params){.session = &session, .provider = &provider}, departing, 2,
+        &attempts);
+    EXPECT(summary != NULL);
+    EXPECT(summary && strstr(summary, "continue") != NULL);
+    EXPECT(attempts == 1);
+    /* The departing items and the instructions; the live window is not resent. */
+    EXPECT(mock.last_request_items == 3);
+    EXPECT(strstr(mock.last_prompt, "Summarize the conversation branch") != NULL);
+    EXPECT(strstr(mock.last_prompt, "## Left Behind") != NULL);
+
+    /* History gains the request's usage footer and nothing else. */
+    EXPECT(session.n_items == 2);
+    EXPECT(session.items[1].kind == ITEM_TURN_USAGE);
+    EXPECT(session.items[1].origin == ITEM_ORIGIN_COMPACTION);
+
+    char *seed = compact_branch_seed(summary);
+    EXPECT(seed && strstr(seed, "no longer the current state") != NULL);
+    EXPECT(seed && strstr(seed, "continue") != NULL);
+    free(seed);
+    free(summary);
+    for (size_t i = 0; i < 2; i++)
+        item_free(&departing[i]);
+    agent_session_free(&session);
+}
+
+static void test_branch_summary_cancel_still_bills(void)
+{
+    struct agent_session session;
+    init_session(&session);
+    struct provider provider = {.name = "test", .stream = mock_stream};
+    struct item departing[] = {{.kind = ITEM_USER_MESSAGE, .text = xstrdup("explore")}};
+    reset_mock(MOCK_SUCCESS);
+    mock.cancel_requested = 1;
+
+    char *summary = compact_summarize_branch(
+        &(struct compact_params){
+            .session = &session,
+            .provider = &provider,
+            .hooks = {.is_cancelled = is_cancelled},
+        },
+        departing, 1, NULL);
+    EXPECT(summary == NULL);
+    EXPECT(session.n_items == 2);
+    EXPECT(session.items[1].kind == ITEM_TURN_USAGE);
+    EXPECT(session.items[1].origin == ITEM_ORIGIN_COMPACTION);
+
+    item_free(&departing[0]);
+    agent_session_free(&session);
+}
+
+/* Without a provider or model there is nothing to ask, and nothing to bill. */
+static void test_branch_summary_requires_a_model(void)
+{
+    struct agent_session session;
+    init_session(&session);
+    struct item departing[] = {{.kind = ITEM_USER_MESSAGE, .text = xstrdup("explore")}};
+    reset_mock(MOCK_SUCCESS);
+
+    EXPECT(compact_summarize_branch(&(struct compact_params){.session = &session, .provider = NULL},
+                                    departing, 1, NULL) == NULL);
+    free(session.model);
+    session.model = NULL;
+    struct provider provider = {.name = "test", .stream = mock_stream};
+    EXPECT(compact_summarize_branch(
+               &(struct compact_params){.session = &session, .provider = &provider}, departing, 1,
+               NULL) == NULL);
+    EXPECT(mock.stream_calls == 0);
+    EXPECT(session.n_items == 1);
+
+    item_free(&departing[0]);
+    agent_session_free(&session);
+}
+
 static void test_preserves_failure(void)
 {
     struct agent_session session;
@@ -712,6 +808,9 @@ int main(void)
     test_keeps_one_session();
     test_tool_call_retries_are_bounded();
     test_resumed_session_floors_at_seed();
+    test_branch_summary_leaves_history_alone();
+    test_branch_summary_cancel_still_bills();
+    test_branch_summary_requires_a_model();
     test_keeps_recent_turn();
     test_keep_turns_zero_summarizes_all();
     test_keeping_more_turns_than_exist_keeps_one_fewer();

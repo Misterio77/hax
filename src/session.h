@@ -167,6 +167,13 @@ int session_load_all(const char *path, struct session_loaded *out);
  * Provider/model selection and usage totals remain session-wide, as for /undo. */
 int session_load_at(const char *path, size_t position, struct session_loaded *out);
 
+/* Collect the part of the current conversation that navigating to `target` would leave behind:
+ * the items after its last common ancestor with the target path, oldest first. The selection is
+ * left alone, so the caller can still describe or discard the branch. Returns 0 with an empty
+ * result when the target is already on the current path. */
+int session_load_departing(const char *path, size_t target, struct item **out_items,
+                           size_t *out_count);
+
 /* Persist a navigation and update the writer's live-item high water mark. Requires an open log;
  * call only after session_load_at validates the position and prepares the replacement history. */
 int session_log_navigate(struct session_log *log, size_t position, size_t new_item_count);

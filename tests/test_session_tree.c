@@ -155,6 +155,29 @@ static void test_seed_splices_ahead_of_kept_tail(void)
     session_tree_free(&tree);
 }
 
+/* Navigating back abandons the selected path's suffix; a target already on that path abandons
+ * nothing, and a sibling abandons the whole sibling. */
+static void test_departing_count_follows_the_shared_prefix(void)
+{
+    struct session_tree tree = {0};
+    add_exchange(&tree, 2, "first");
+    add_exchange(&tree, 5, "second");
+    EXPECT(tree.position == 7);
+    EXPECT(session_tree_departing_count(&tree, 7) == 0);
+    EXPECT(session_tree_departing_count(&tree, 4) == 3);
+    EXPECT(session_tree_departing_count(&tree, 0) == 6);
+    EXPECT(session_tree_departing_count(&tree, 6) == 1);
+
+    session_tree_undo(&tree, 1);
+    add_exchange(&tree, 11, "alternative");
+    EXPECT(session_tree_departing_count(&tree, 13) == 0);
+    EXPECT(session_tree_departing_count(&tree, 11) == 2);
+    EXPECT(session_tree_departing_count(&tree, 4) == 3);
+    /* The abandoned sibling still exists in the file: selecting it abandons this branch's tail. */
+    EXPECT(session_tree_departing_count(&tree, 7) == 3);
+    session_tree_free(&tree);
+}
+
 /* A tail longer than the conversation keeps everything and makes the seed the root. */
 static void test_seed_keep_past_root(void)
 {
@@ -217,6 +240,7 @@ int main(void)
     test_compaction_and_continuation_follow_ancestry();
     test_seed_splices_ahead_of_kept_tail();
     test_seed_keep_past_root();
+    test_departing_count_follows_the_shared_prefix();
     test_repeated_navigation_does_not_duplicate_items();
     test_empty_tree();
     T_REPORT();

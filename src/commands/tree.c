@@ -138,21 +138,29 @@ void tree_command(struct agent_state *state)
 
     struct tree_view view;
     tree_view_build(&loaded, locale_have_utf8(), &view);
-    int edit = 0;
+    unsigned char action = 0;
     struct picker_opts options = {
-        .title = "session tree · enter continue · e edit · / search · alt-e edit filtered",
+        .title = "session tree · enter continue · e edit · s summarize · / search · alt-e/s "
+                 "filtered",
         .items = view.items,
         .item_count = view.count,
         .initial_index = view.initial,
         .repeat_clipped_label = 1,
-        .alternate_key = 'e',
-        .alternate_selected = &edit,
+        .alternate_keys = "es",
+        .alternate_chosen = &action,
     };
     long selected = picker_run(&options);
     if (selected >= 0) {
         const struct session_tree_entry *entry = &loaded.tree[view.entries[selected]];
-        agent_navigate_tree(state, edit ? entry->position : entry->after_position, entry->prompt,
-                            edit);
+        enum agent_tree_action request = AGENT_TREE_CONTINUE;
+        size_t position = entry->after_position;
+        if (action == 'e') {
+            request = AGENT_TREE_EDIT;
+            position = entry->position;
+        } else if (action == 's') {
+            request = AGENT_TREE_SUMMARIZE;
+        }
+        agent_navigate_tree(state, position, entry->prompt, request);
     }
     tree_view_free(&view);
     session_loaded_free(&loaded);

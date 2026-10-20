@@ -18,9 +18,10 @@ notes (see [docs/releasing.md](docs/releasing.md)).
   descendants, including history left by `/undo`. Branch switches persist immediately, keep the
   current model selection, and print only a short marker; Ctrl-O shows the selected history. Rows
   show real ancestry and mark only the current turn. Enter continues after the selected turn;
-  `e` edits its prompt (`Alt-E` while filtering, `/` to search starting with `e`). Navigation
-  requires session recording and no uncollected background tasks. Pressing Escape at an empty
-  prompt also opens the tree, without affecting Esc during active work.
+  `e` edits its prompt (`Alt-E` while filtering, `/` to search starting with `e`). `s` summarizes
+  the branch being left and carries that summary into the destination as context, so what it tried
+  survives the switch. Navigation requires session recording and no uncollected background tasks.
+  Pressing Escape at an empty prompt also opens the tree, without affecting Esc during active work.
 
 ### Changed
 

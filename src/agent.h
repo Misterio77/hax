@@ -61,11 +61,21 @@ void agent_undo(struct agent_state *state, size_t turn_index);
  * unchanged. */
 void agent_fork(struct agent_state *state, size_t turn_index);
 
-/* Select a recorded tree position; edit prefills prompt instead of continuing after its reply.
- * Running or uncollected background tasks block navigation. Writes the cursor before replacing
- * history; errors leave the live conversation unchanged. Does not replay history or change the
- * provider selection. */
-int agent_navigate_tree(struct agent_state *state, size_t position, const char *prompt, int edit);
+/* What selecting a tree row does after the switch. */
+enum agent_tree_action {
+    /* Continue after the selected reply. */
+    AGENT_TREE_CONTINUE,
+    /* Prefill the selected prompt for editing instead of continuing after its reply. */
+    AGENT_TREE_EDIT,
+    /* Summarize the branch being left and carry the summary into the destination. */
+    AGENT_TREE_SUMMARIZE,
+};
+
+/* Select a recorded tree position and perform `action`. Running or uncollected background tasks
+ * block navigation. Writes the cursor before replacing history; errors leave the live conversation
+ * and original branch unchanged. Does not replay history or change the provider selection. */
+int agent_navigate_tree(struct agent_state *state, size_t position, const char *prompt,
+                        enum agent_tree_action action);
 
 /* How agent_apply_settings confirms a selection. */
 enum apply_announce {

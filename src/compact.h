@@ -53,6 +53,17 @@ struct compact_result {
 void compact_run(const struct compact_params *params, struct compact_result *result);
 void compact_result_destroy(struct compact_result *result);
 
+/* Summarize an abandoned branch and return the owned text, recording every attempt's usage in the
+ * live conversation. Nothing is appended and the history is untouched: the caller decides whether
+ * to switch. Returns NULL when the provider or model is missing, the request failed, it was
+ * cancelled, or it produced nothing. `attempts` may be NULL. */
+char *compact_summarize_branch(const struct compact_params *params, const struct item *items,
+                               size_t n_items, int *attempts);
+
+/* Wrap a branch summary in the note that frames it as a report about work that is no longer
+ * current. Returns an owned string. */
+char *compact_branch_seed(const char *summary);
+
 /* Read the compact.auto setting. Manual compaction does not consult it. */
 int compact_auto_enabled(void);
 

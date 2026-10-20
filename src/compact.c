@@ -62,6 +62,49 @@ static const char COMPACT_SEED_PREAMBLE[] =
     "below captures everything that happened before this point — treat it as established "
     "context and continue the work from here.";
 
+/* A branch summary is read at a point in the conversation that never saw the branch run, so its
+ * sections separate what was learned from what is still standing outside the conversation. */
+static const char BRANCH_PROMPT[] =
+    "Summarize the conversation branch below. The user explored it and then went back to an "
+    "earlier point, so this is what remains of that work when the conversation continues "
+    "elsewhere.\n"
+    "\n"
+    "CRITICAL: Respond with the summary text ONLY. Do not call any tools and do not continue "
+    "the task — your entire reply is the summary.\n"
+    "\n"
+    "Use this exact Markdown structure, keeping every section even when empty:\n"
+    "\n"
+    "## Explored\n"
+    "- [what this branch set out to do, or \"(none)\"]\n"
+    "\n"
+    "## Learned\n"
+    "- [facts established by reading, running, or testing, with the file, command, or error "
+    "string that established them, or \"(none)\"]\n"
+    "\n"
+    "## Tried\n"
+    "- [changes and approaches that ran and their outcome, saying so when the outcome is "
+    "unverified, or \"(none)\"]\n"
+    "\n"
+    "## Left Behind\n"
+    "- [anything this branch changed outside the conversation — edited files, created branches, "
+    "running processes — or \"(none)\"]\n"
+    "\n"
+    "## Worth Keeping\n"
+    "- [conclusions or fixes worth carrying forward, marking anything unverified, or "
+    "\"(none)\"]\n"
+    "\n"
+    "Rules:\n"
+    "- Be terse: bullets, not prose paragraphs.\n"
+    "- Use the past tense: the branch is not the current state of the work.\n"
+    "- Preserve exact file paths, function names, commands, and error strings.\n"
+    "- Do not mention that a summary was produced or that a branch was abandoned.";
+
+static const char BRANCH_SEED_PREAMBLE[] =
+    "Before continuing from here, the user explored a different branch of this conversation and "
+    "then returned. The summary below is what that branch did and learned. It describes work that "
+    "is no longer the current state — files it changed may have changed since, and nothing it "
+    "describes has been re-checked — so verify before relying on it.";
+
 int compact_auto_enabled(void)
 {
     return config_bool("compact.auto");
@@ -152,29 +195,27 @@ static void summary_request_append(struct summary_request *request, struct item 
     request->items[request->count++] = item;
 }
 
-/* Only the prefix is summarized: whatever the seed keeps is still in the window verbatim, so
- * summarizing it would pay twice and could drop detail the tail states plainly. */
+/* The request borrows the window it summarizes and appends its instructions as the final user
+ * message. Everything else — system prompt, tools, effort — comes from the live session, so a
+ * summarization looks like an ordinary turn to the provider. */
 static void summary_request_init(struct summary_request *request,
-                                 const struct compact_params *params, size_t summarize_items)
+                                 const struct compact_params *params, const struct item *items,
+                                 size_t n_items, char *prompt)
 {
     memset(request, 0, sizeof(*request));
     request->base_context = agent_session_context(params->session);
-    if (summarize_items < request->base_context.n_items)
-        request->base_context.n_items = summarize_items;
+    request->base_context.items = items;
+    request->base_context.n_items = n_items;
     request->base_context.image_input =
         model_meta_image_input(params->provider, params->session->model);
     request->base_context.session_id = session_log_id(params->session_log);
-    request->borrowed_count = request->base_context.n_items;
-    request->capacity = request->borrowed_count + 1;
+    request->borrowed_count = n_items;
+    request->capacity = n_items + 1;
     request->items = xmalloc(request->capacity * sizeof(*request->items));
-    if (request->borrowed_count > 0)
-        memcpy(request->items, request->base_context.items,
-               request->borrowed_count * sizeof(*request->items));
-    request->count = request->borrowed_count;
-    summary_request_append(request, (struct item){
-                                        .kind = ITEM_USER_MESSAGE,
-                                        .text = build_summary_prompt(params->instructions),
-                                    });
+    if (n_items > 0)
+        memcpy(request->items, items, n_items * sizeof(*request->items));
+    request->count = n_items;
+    summary_request_append(request, (struct item){.kind = ITEM_USER_MESSAGE, .text = prompt});
 }
 
 static void summary_request_destroy(struct summary_request *request)
@@ -235,11 +276,13 @@ static void append_rejected_response(struct summary_request *request, struct ite
     }
 }
 
+/* The request owns `prompt` once it is built. */
 static char *generate_summary(const struct compact_params *params, struct compact_sink *sink,
-                              int *attempt_count, size_t summarize_items)
+                              int *attempt_count, const struct item *items, size_t n_items,
+                              char *prompt)
 {
     struct summary_request request;
-    summary_request_init(&request, params, summarize_items);
+    summary_request_init(&request, params, items, n_items, prompt);
     char *summary = NULL;
 
     /* Advertising the normal tools preserves the provider's cached request prefix. Calls are
@@ -389,7 +432,11 @@ void compact_run(const struct compact_params *params, struct compact_result *res
     struct compact_sink sink = {.hooks = &params->hooks};
     turn_init(&sink.turn);
     attempt_log_init(&sink.attempt_log);
-    char *summary = generate_summary(params, &sink, &result->attempts, keep_from - floor);
+    /* Only the prefix is summarized: whatever the seed keeps is still in the window verbatim, so
+     * summarizing it would pay twice and could drop detail the tail states plainly. */
+    char *summary =
+        generate_summary(params, &sink, &result->attempts, params->session->items + floor,
+                         keep_from - floor, build_summary_prompt(params->instructions));
     int cancelled = params->hooks.is_cancelled && params->hooks.is_cancelled(params->hooks.user);
     if (cancelled) {
         free(summary);
@@ -425,6 +472,46 @@ void compact_run(const struct compact_params *params, struct compact_result *res
     flush_compaction_logs(params);
     splice_seed_before_tail(params->session, keep_from, seed_index);
     result->outcome = COMPACT_COMPLETE;
+}
+
+/* Everything the request learns is billed to the branch being left, in this conversation: its
+ * footers land before the navigation that abandons them. */
+char *compact_summarize_branch(const struct compact_params *params, const struct item *items,
+                               size_t n_items, int *attempts)
+{
+    char *summary = NULL;
+    if (attempts)
+        *attempts = 0;
+    if (!params->provider || !params->session->model || !*params->session->model || n_items == 0)
+        return NULL;
+
+    struct compact_sink sink = {.hooks = &params->hooks};
+    turn_init(&sink.turn);
+    attempt_log_init(&sink.attempt_log);
+    int attempt_count = 0;
+    summary =
+        generate_summary(params, &sink, &attempt_count, items, n_items, xstrdup(BRANCH_PROMPT));
+    if (attempts)
+        *attempts = attempt_count;
+    if (params->hooks.is_cancelled && params->hooks.is_cancelled(params->hooks.user)) {
+        free(summary);
+        summary = NULL;
+    }
+    turn_reset(&sink.turn);
+    free(sink.error_message);
+    append_attempt_usage(params, &sink.attempt_log, 0, sink.attempt_log.count);
+    attempt_log_free(&sink.attempt_log);
+    flush_compaction_logs(params);
+    if (!summary || !*summary) {
+        free(summary);
+        return NULL;
+    }
+    return summary;
+}
+
+char *compact_branch_seed(const char *summary)
+{
+    return xasprintf("%s\n\n%s", BRANCH_SEED_PREAMBLE, summary);
 }
 
 void compact_result_destroy(struct compact_result *result)

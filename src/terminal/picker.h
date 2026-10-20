@@ -23,13 +23,13 @@ struct picker_opts {
     size_t initial_index;      /* defaults to 0 */
     /* Show a clipped label in full below the list. */
     int repeat_clipped_label;
-    /* Optional secondary accept: the bare key with an empty query, or Alt+key at any time.
-     * / starts explicit search, permitting queries beginning with the secondary key; Ctrl-U
-     * clears it. Other printable keys still filter. alternate_selected is reset on entry and set
-     * only on secondary acceptance; it may be NULL when the caller does not need to distinguish
-     * actions. */
-    unsigned char alternate_key;
-    int *alternate_selected;
+    /* Optional secondary accepts, any of the bytes in this NUL-terminated set: a bare key at an
+     * empty query, or Alt+key at any time. / starts explicit search, permitting queries beginning
+     * with one of them; Ctrl-U clears it. Other printable keys still filter. alternate_chosen is
+     * reset on entry and receives the byte that accepted, zero for a plain accept; it may be NULL
+     * when the caller does not need to distinguish actions. */
+    const char *alternate_keys;
+    unsigned char *alternate_chosen;
 };
 
 /* Opens an interactive, type-to-filter list and returns an index into `items`. The filter matches
