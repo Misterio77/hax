@@ -7,6 +7,7 @@
 #include "buf.h"
 #include "harness.h"
 #include "xalloc.h"
+#include "render/disp.h"
 #include "render/footer.h"
 #include "system/locale.h"
 #include "terminal/ansi.h"
@@ -76,10 +77,10 @@ static void test_frame_paints_rows_verbatim_under_glyph(void)
                                 {.bytes = "<newest>", .cells = 8}};
 
     footer_build_frame(&frame, &region, rows, 2, "*", 80);
-    EXPECT_STR_EQ(frame.data, ANSI_SYNC_BEGIN "\r"
-                                              "<older>" ANSI_ERASE_LINE "\r\n"
-                                              "<newest>" ANSI_ERASE_BELOW "\r" FRAME_CHROME
-                                              "*" ANSI_RESET ANSI_SYNC_END);
+    EXPECT_STR_EQ(frame.data, ANSI_SYNC_BEGIN ANSI_RESET
+                  "\r"
+                  "<older>" ANSI_ERASE_LINE "\r\n"
+                  "<newest>" ANSI_ERASE_BELOW "\r" FRAME_CHROME "*" ANSI_RESET ANSI_SYNC_END);
     EXPECT(region.row_count == 2);
     EXPECT(region.cursor_row == 1);
     EXPECT(region.cursor_col == 0);
@@ -95,10 +96,57 @@ static void test_frame_without_glyph_rests_cursor_at_row_start(void)
     struct footer_row row = {.bytes = "<status>", .cells = 8};
 
     footer_build_frame(&frame, &region, &row, 1, NULL, 80);
-    EXPECT_STR_EQ(frame.data, ANSI_SYNC_BEGIN "\r<status>" ANSI_ERASE_BELOW "\r" ANSI_SYNC_END);
+    EXPECT_STR_EQ(frame.data,
+                  ANSI_SYNC_BEGIN ANSI_RESET "\r<status>" ANSI_ERASE_BELOW "\r" ANSI_SYNC_END);
     EXPECT(region.cursor_col == 0);
     live_region_free(&region);
     buf_free(&frame);
+}
+
+static void test_status_row_starts_the_next_block(void)
+{
+    struct disp disp = {.column = 7};
+    EXPECT(footer_status_gap(&disp) == 2);
+
+    disp = (struct disp){.committed_newlines = 1};
+    EXPECT(footer_status_gap(&disp) == 1);
+
+    disp = (struct disp){.committed_newlines = 2};
+    EXPECT(footer_status_gap(&disp) == 0);
+    disp.pending_newlines = 3;
+    EXPECT(footer_status_gap(&disp) == 0);
+}
+
+static void test_return_lands_where_output_ends_on_screen(void)
+{
+    char *bytes = NULL;
+    size_t len = 0;
+    struct disp disp = {.sink = open_memstream(&bytes, &len)};
+    struct buf out;
+    buf_init(&out);
+
+    /* Narrowed after painting, the output's row has rewrapped; the return follows it. */
+    for (int i = 0; i < 55; i++)
+        disp_putc(&disp, 'A');
+    footer_build_return(&out, &disp, 2, 40);
+    EXPECT_STR_EQ(out.data, "\x1b[2A\x1b[16G");
+
+    buf_reset(&out);
+    for (int i = 0; i < 24; i++)
+        disp_putc(&disp, 'A');
+    disp_write(&disp, "\xe7\x95\x8c", 3);
+    footer_build_return(&out, &disp, 2, 80);
+    EXPECT_STR_EQ(out.data, "\x1b[2A\x1b[3G");
+
+    buf_reset(&out);
+    disp_write(&disp, "\n", 1);
+    disp_commit_newlines(&disp);
+    footer_build_return(&out, &disp, 1, 80);
+    EXPECT_STR_EQ(out.data, "\x1b[1A");
+
+    buf_free(&out);
+    fclose(disp.sink);
+    free(bytes);
 }
 
 int main(void)
@@ -107,5 +155,7 @@ int main(void)
     test_footer_is_null_and_silent_without_tty();
     test_frame_paints_rows_verbatim_under_glyph();
     test_frame_without_glyph_rests_cursor_at_row_start();
+    test_status_row_starts_the_next_block();
+    test_return_lands_where_output_ends_on_screen();
     T_REPORT();
 }

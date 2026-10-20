@@ -30,11 +30,6 @@ struct render_ctx {
     } cluster;
 
     struct {
-        long started_at_ms; /* 0 when no buffered table is being timed */
-        int spinner_visible;
-    } table;
-
-    struct {
         long deadline_ms; /* 0 when no retry is pending */
         int next_attempt;
         int max_attempts;
@@ -44,6 +39,7 @@ struct render_ctx {
         int content_seen; /* the current stream has content a pause must preserve */
         int answer_started;
         int output_rendered; /* the current attempt wrote text or reasoning to the terminal */
+        int in_table;        /* Markdown is buffering a table, so nothing appears for a while */
     } stream;
 
     int show_reasoning;
@@ -70,9 +66,6 @@ void render_write_text(struct render_ctx *render, const char *bytes, size_t len)
 
 /* Render assistant text, ignoring initial line endings until visible text arrives. */
 void render_text_delta(struct render_ctx *render, const char *bytes, size_t len);
-
-/* Show the delayed spinner for a buffered table. No-op outside text mode. */
-void render_show_table_spinner(struct render_ctx *render);
 
 /* Format the retry indicator for now_ms into out: a countdown while the retry sleep is pending,
  * and a plain attempt marker once the deadline has passed and the retried request is in flight. */

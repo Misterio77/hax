@@ -59,16 +59,13 @@ static const char *build_prompt(char *buffer, size_t size)
     return buffer;
 }
 
-/* Tables buffer invisibly until layout completes; delay the spinner to avoid flicker on fast
- * tables. */
-#define TABLE_SPINNER_DELAY_MS 1500
-
-/* ANSI must bypass disp bookkeeping or it commits a pending newline before the next separator. */
+/* Raw ANSI goes in as zero-width controls, or it would commit a pending newline before the next
+ * separator. */
 static void md_emit_to_disp(const char *bytes, size_t byte_count, int is_raw, void *user)
 {
     struct disp *disp = user;
     if (is_raw)
-        fwrite(bytes, 1, byte_count, disp_sink(disp));
+        disp_write_raw(disp, bytes, byte_count);
     else
         disp_write(disp, bytes, byte_count);
 }
@@ -139,8 +136,7 @@ static void display_stats_line(struct render_ctx *render, const struct provider 
     disp_flush(disp);
 }
 
-/* Curl wait/chunk hook for cancellation and timer-driven retry/table labels. Ordinary text
- * stalls intentionally show no spinner. */
+/* Curl wait/chunk hook for cancellation and the timer-driven retry label. */
 static int agent_stream_tick(void *user)
 {
     struct render_ctx *render = user;
@@ -153,13 +149,8 @@ static int agent_stream_tick(void *user)
             return 1;
     }
     /* Retry countdown owns the label while the model is not streaming. */
-    if (render->retry.deadline_ms) {
+    if (render->retry.deadline_ms)
         render_update_retry_label(render);
-    } else if (render->md && md_in_table(render->md)) {
-        if (!render->table.spinner_visible && render->table.started_at_ms &&
-            monotonic_ms() - render->table.started_at_ms >= TABLE_SPINNER_DELAY_MS)
-            render_show_table_spinner(render);
-    }
     return interrupt_abort_requested();
 }
 
@@ -168,9 +159,6 @@ static int render_on_event(const struct stream_event *event, void *user)
     struct render_ctx *render = user;
     struct disp *disp = &render->disp;
 
-    /* Stream completion closes the buffered-table timing window. */
-    if (event->kind == EV_DONE || event->kind == EV_ERROR)
-        render->table.started_at_ms = 0;
     /* The first post-retry event returns label control to normal rendering. */
     if (event->kind != EV_RETRY && render->retry.deadline_ms) {
         render->retry.deadline_ms = 0;
@@ -1109,6 +1097,7 @@ int agent_run(struct provider **provider_io, const struct hax_opts *options)
     struct render_ctx render = {.disp = {.sink = stdout, .committed_newlines = 1},
                                 .show_reasoning = reasoning_visible()};
     render.footer = footer_new("working...");
+    footer_attach(render.footer, &render.disp);
     render.md = markdown_enabled() ? md_new(md_emit_to_disp, &render.disp, md_cols()) : NULL;
     /* Transcript logging is optional; its API is NULL-safe. */
     struct transcript_log *transcript =

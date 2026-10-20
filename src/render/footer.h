@@ -6,8 +6,10 @@
  * terminals only: either the spinner's status row or rows of live tool output, animated until
  * hidden. Operations taking a footer pointer are NULL-safe no-ops.
  *
- * Between show and hide, callers must not write to stdout; the footer owns the cursor. */
+ * Between show and hide, callers must not write to stdout except through an attached disp, which
+ * makes way for the footer; otherwise the footer owns the cursor. */
 struct footer;
+struct disp;
 
 #define FOOTER_ROWS_MAX 8
 
@@ -16,9 +18,17 @@ struct footer;
 struct footer *footer_new(const char *label);
 void footer_free(struct footer *footer);
 
-/* Show the status row at column zero of the current empty row. Hide erases that row. A first
- * appearance from hidden is deferred briefly; any show or hide within the grace period cancels
- * it. */
+/* Let output written through disp pass the footer, which steps aside before each batch of writes
+ * and repaints below the output at disp_flush(). disp is borrowed until footer_free(). */
+void footer_attach(struct footer *footer, struct disp *disp);
+
+/* Rows from where disp's output ends down to the status row: the status row starts the next
+ * block, one blank row below the output's last row. */
+int footer_status_gap(const struct disp *disp);
+
+/* Show the status row where the next block of the attached output starts, or at column zero of the
+ * current empty row when unattached. Hide erases it. A first appearance from hidden is deferred
+ * briefly; any show or hide within the grace period cancels it. */
 void footer_show(struct footer *footer);
 
 /* Show the status row one blank row below the current cursor, then restore the cursor on hide.
@@ -64,6 +74,10 @@ void footer_set_timer(struct footer *footer, long started_at_ms);
 
 struct buf;
 struct live_region;
+
+/* Append the moves from the footer's top to where disp's output ends, gap_rows above it, on a
+ * screen terminal_cols wide. Pure with respect to the terminal. */
+void footer_build_return(struct buf *out, const struct disp *disp, int gap_rows, int terminal_cols);
 
 /* Append one synchronized repaint of region with rows, overprinting each row before erasing its
  * stale tail so terminals without synchronized output never show a blank frame. The cursor rests

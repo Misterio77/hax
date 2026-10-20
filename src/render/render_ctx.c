@@ -9,22 +9,12 @@
 #include "system/clock.h"
 #include "terminal/ansi.h"
 
-static int hide_table_spinner(struct render_ctx *render)
-{
-    if (!render->table.spinner_visible)
-        return 0;
-    footer_hide(render->footer);
-    render->table.spinner_visible = 0;
-    return 1;
-}
-
 static void close_mode(struct render_ctx *render)
 {
     switch (render->mode) {
     case RENDER_IDLE:
         break;
     case RENDER_WAITING:
-        footer_hide(render->footer);
         break;
     case RENDER_REASONING:
         if (render->md)
@@ -52,6 +42,7 @@ static void open_mode(struct render_ctx *render, enum render_mode mode)
 {
     switch (mode) {
     case RENDER_IDLE:
+        footer_hide(render->footer);
         break;
     case RENDER_WAITING:
         disp_block_separator(&render->disp);
@@ -59,16 +50,19 @@ static void open_mode(struct render_ctx *render, enum render_mode mode)
         footer_show(render->footer);
         break;
     case RENDER_REASONING:
-        footer_hide(render->footer);
         disp_block_separator(&render->disp);
+        /* Output on screen settles the state, so the label follows it without hysteresis. */
+        footer_set_label(render->footer, "thinking", "thinking...");
+        footer_show(render->footer);
         disp_write_ansi(&render->disp, ANSI_DIM ANSI_ITALIC);
         /* Markdown styling would override the surrounding reasoning style. */
         if (render->md)
             md_set_styled(render->md, 0);
         break;
     case RENDER_TEXT:
-        footer_hide(render->footer);
         disp_block_separator(&render->disp);
+        footer_set_label(render->footer, "working", "working...");
+        footer_show(render->footer);
         render->stream.answer_started = 1;
         if (render->md)
             md_set_styled(render->md, 1);
@@ -87,16 +81,15 @@ void render_set_mode(struct render_ctx *render, enum render_mode target)
     if (render->mode == target)
         return;
 
-    /* Closing Markdown may render into the composing spinner's row. */
-    hide_table_spinner(render);
     close_mode(render);
     open_mode(render, target);
     render->mode = target;
+    disp_flush(&render->disp);
 }
 
 static void render_wait_for_stream(struct render_ctx *render)
 {
-    render->table.started_at_ms = 0;
+    render->stream.in_table = 0;
     render_set_mode(render, RENDER_WAITING);
     /* Deferred labels prevent rapid item boundaries from flickering. */
     footer_request_label(render->footer, "working", "working...");
@@ -114,7 +107,7 @@ void render_stream_boundary(struct render_ctx *render)
 
 void render_stream_begin(struct render_ctx *render)
 {
-    render->table.started_at_ms = 0;
+    render->stream.in_table = 0;
     render->retry.deadline_ms = 0;
     render->retry.next_attempt = 0;
     render->retry.max_attempts = 0;
@@ -138,7 +131,7 @@ void render_stream_retry(struct render_ctx *render)
         disp_putc(&render->disp, '\n');
         render_set_mode(render, RENDER_WAITING);
     }
-    render->table.started_at_ms = 0;
+    render->stream.in_table = 0;
     render->stream.content_seen = 0;
     render->stream.answer_started = 0;
     render->stream.output_rendered = 0;
@@ -154,38 +147,23 @@ void render_open_block(struct render_ctx *render)
     disp_block_separator(&render->disp);
 }
 
-void render_show_table_spinner(struct render_ctx *render)
-{
-    if (render->table.spinner_visible || render->mode != RENDER_TEXT)
-        return;
-
-    /* The spinner's erase-line sequence must land below already-rendered text. */
-    disp_commit_newlines(&render->disp);
-    footer_set_label(render->footer, "composing", "composing...");
-    footer_show(render->footer);
-    render->table.spinner_visible = 1;
-}
-
 void render_write_text(struct render_ctx *render, const char *bytes, size_t len)
 {
     render->stream.output_rendered = 1;
-    /* A feed may complete the table and render into the spinner's row. */
-    int spinner_was_visible = hide_table_spinner(render);
-    int was_in_table = render->md && md_in_table(render->md);
-
     if (render->md)
         md_feed(render->md, bytes, len);
     else
         disp_write(&render->disp, bytes, len);
     disp_flush(&render->disp);
 
+    /* A table shows only once complete; the label explains the wait, and its settle time keeps a
+     * quick table from flashing it. */
     if (render->md && md_in_table(render->md)) {
-        if (!was_in_table)
-            render->table.started_at_ms = monotonic_ms();
-        if (spinner_was_visible)
-            render_show_table_spinner(render);
-    } else {
-        render->table.started_at_ms = 0;
+        footer_request_label(render->footer, "composing", "composing...");
+        render->stream.in_table = 1;
+    } else if (render->stream.in_table) {
+        footer_set_label(render->footer, "working", "working...");
+        render->stream.in_table = 0;
     }
 }
 

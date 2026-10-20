@@ -15,6 +15,9 @@ notes (see [docs/releasing.md](docs/releasing.md)).
 - The llama.cpp provider now connects to port 9931 by default, matching `llama-server` since
   llama.cpp v0.7.0. For an older server, set `HAX_LLAMACPP_PORT=8080` or
   `providers.llamacpp.port`.
+- The spinner stays up while an answer streams, below the text written so far, so a stalled
+  response no longer looks finished. Its label says "thinking..." during visible reasoning, and
+  "composing..." while a long table is held back until it can be laid out.
 
 ## [0.6.1] - 2026-10-15
 

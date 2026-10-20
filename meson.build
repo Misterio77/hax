@@ -171,6 +171,7 @@ sources = files(
     'src/terminal/notify.c',
     'src/terminal/picker.c',
     'src/terminal/picker_core.c',
+    'src/terminal/sgr.c',
     'src/terminal/theme.c',
     'src/terminal/ui.c',
     'src/terminal/vt_resolve.c',

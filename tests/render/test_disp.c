@@ -6,6 +6,7 @@
 #include "harness.h"
 #include "render/disp.h"
 #include "system/locale.h"
+#include "terminal/sgr.h"
 
 struct capture {
     struct disp disp;
@@ -340,6 +341,103 @@ static void test_new_row_drops_partial_sequences(void)
     capture_free(&capture);
 }
 
+struct live_calls {
+    int suspends;
+    int resumes;
+};
+
+static void count_suspend(void *user)
+{
+    ((struct live_calls *)user)->suspends++;
+}
+
+static void count_resume(void *user)
+{
+    ((struct live_calls *)user)->resumes++;
+}
+
+static void write_repeated(struct disp *disp, char byte, size_t count)
+{
+    for (size_t i = 0; i < count; i++)
+        disp_write(disp, &byte, 1);
+}
+
+static void test_screen_column_wraps_like_a_terminal(void)
+{
+    struct capture capture;
+    if (!capture_init(&capture, 0))
+        return;
+
+    write_repeated(&capture.disp, 'A', 55);
+    EXPECT(disp_screen_column(&capture.disp, 80) == 55);
+    EXPECT(disp_screen_column(&capture.disp, 40) == 15);
+
+    /* A wide character that would straddle the edge starts the next row, one cell later. */
+    write_repeated(&capture.disp, 'A', 24);
+    disp_write(&capture.disp, "\xe7\x95\x8c", 3);
+    EXPECT(disp_screen_column(&capture.disp, 80) == 2);
+    EXPECT(disp_screen_column(&capture.disp, 40) == 2);
+
+    disp_write(&capture.disp, "\n", 1);
+    disp_commit_newlines(&capture.disp);
+    write_repeated(&capture.disp, 'A', 80);
+    EXPECT(disp_screen_column(&capture.disp, 80) == 80);
+    EXPECT(disp_screen_column(&capture.disp, 0) == 80);
+
+    /* A new row forgets the wide characters before it. */
+    disp_write(&capture.disp, "\xe7\x95\x8c\n", 4);
+    disp_commit_newlines(&capture.disp);
+    write_repeated(&capture.disp, 'A', 79);
+    EXPECT(disp_screen_column(&capture.disp, 80) == 79);
+    capture_free(&capture);
+}
+
+static void test_style_tracks_sgr_across_writes(void)
+{
+    struct capture capture;
+    if (!capture_init(&capture, 0))
+        return;
+
+    write_bytewise(&capture.disp, "\x1b[1mbold");
+    disp_write_raw(&capture.disp, "\x1b[3m", 4);
+    disp_write(&capture.disp, "row\nnext", 8);
+    EXPECT(capture.disp.style.bold);
+    EXPECT(capture.disp.style.italic);
+
+    disp_write_ansi(&capture.disp, "\x1b[0m");
+    EXPECT(sgr_is_default(&capture.disp.style));
+    capture_free(&capture);
+}
+
+static void test_live_area_steps_aside_once_per_batch(void)
+{
+    struct capture capture;
+    if (!capture_init(&capture, 0))
+        return;
+    struct live_calls calls = {0};
+    struct disp_live_area live = {.suspend = count_suspend, .resume = count_resume, .user = &calls};
+    capture.disp.live = &live;
+
+    disp_flush(&capture.disp);
+    disp_write(&capture.disp, "\n", 1);
+    EXPECT(calls.suspends == 0);
+
+    disp_write(&capture.disp, "text", 4);
+    disp_write_ansi(&capture.disp, "\x1b[0m");
+    disp_putc(&capture.disp, '!');
+    EXPECT(calls.suspends == 1);
+    EXPECT(calls.resumes == 0);
+    disp_flush(&capture.disp);
+    EXPECT(calls.resumes == 1);
+
+    disp_write_raw(&capture.disp, "\x1b[2m", 4);
+    EXPECT(calls.suspends == 2);
+    disp_flush(&capture.disp);
+    disp_flush(&capture.disp);
+    EXPECT(calls.resumes == 2);
+    capture_free(&capture);
+}
+
 static void test_null_sink_selects_stdout(void)
 {
     struct disp disp = {0};
@@ -368,6 +466,9 @@ int main(void)
     test_column_follows_the_cursor_row();
     test_column_survives_split_writes();
     test_new_row_drops_partial_sequences();
+    test_screen_column_wraps_like_a_terminal();
+    test_style_tracks_sgr_across_writes();
+    test_live_area_steps_aside_once_per_batch();
     test_null_sink_selects_stdout();
 
     T_REPORT();
