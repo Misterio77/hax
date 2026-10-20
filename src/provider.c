@@ -48,6 +48,26 @@ size_t items_image_count(const struct item *items, size_t n_items)
     return total;
 }
 
+/* Providers report token counts; choosing what a compaction keeps verbatim needs a number before
+ * the request exists. Three bytes per token is deliberately pessimistic for both prose and source,
+ * so the estimate can only ever keep less than asked. Images are left out: their budgets are
+ * counted in parts, not text bytes, and bounded separately. */
+long items_token_estimate(const struct item *items, size_t n_items)
+{
+    long tokens = 0;
+    for (size_t i = 0; i < n_items; i++) {
+        const struct item *item = &items[i];
+        const char *fields[] = {
+            item->text,           item->output,         item->tool_arguments_json,
+            item->reasoning_text, item->reasoning_json, item->tool_name};
+        tokens += 1; /* per-item framing */
+        for (size_t field = 0; field < sizeof(fields) / sizeof(fields[0]); field++)
+            if (fields[field])
+                tokens += (long)(strlen(fields[field]) / 3);
+    }
+    return tokens;
+}
+
 size_t items_context_floor(const struct item *items, size_t n_items)
 {
     for (size_t i = n_items; i-- > 0;)
@@ -72,6 +92,20 @@ size_t items_user_turn_cut(const struct item *items, size_t n_items, size_t keep
         prompts_seen++;
     }
     return n_items;
+}
+
+/* Retention counts from the newest turn back, so a conversation with fewer prompts than asked for
+ * keeps all of them: the seed would then have nothing to summarize. */
+size_t items_keep_tail_cut(const struct item *items, size_t n_items, size_t keep_user_turns)
+{
+    size_t prompts_seen = 0;
+    for (size_t i = n_items; i-- > 0;) {
+        if (!item_is_typed_prompt(&items[i]))
+            continue;
+        if (++prompts_seen == keep_user_turns)
+            return i > 0 && items[i - 1].kind == ITEM_TURN_BOUNDARY ? i - 1 : i;
+    }
+    return 0;
 }
 
 void item_free(struct item *item)

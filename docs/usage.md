@@ -296,6 +296,14 @@ window. Use `/compact` earlier when the conversation has accumulated obsolete ex
 optionally naming what the summary must preserve. Manual compaction works even when the model's
 context limit is unknown.
 
+A compaction keeps the newest user turns word for word after the summary, so the model continues
+from exactly the state the conversation was last in instead of a paraphrase of it: one turn by
+default, `compact.keep_turns` to keep more, and `0` to summarize everything. Retention never blocks
+compaction. A conversation with fewer turns than that keeps as many as leave something to summarize,
+and when the context window is known the kept tail may take at most a quarter of it: turns are
+dropped from the tail, whole, until it fits. A turn too large to keep — one big file dump — is
+therefore summarized rather than left to overflow the window.
+
 For local servers, configure a context window large enough for the system prompt, project context,
 conversation, and response. A small server-side context often appears as truncated answers rather
 than a hax error; see the provider-specific notes in [providers.md](./providers.md).

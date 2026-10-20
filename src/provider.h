@@ -76,6 +76,10 @@ struct item {
     char *provider;
     char *model;
     enum item_origin origin;
+    /* COMPACT_SEED: how many items the seed keeps verbatim. Those items precede the seed in the
+     * file — appends can only grow forward — so a reader moves the seed in front of them and the
+     * model-visible window starts with a summary followed by recent turns. */
+    size_t keep_count;
     /* TURN_USAGE: owned accounting payload; NULL for other kinds. */
     struct turn_usage *usage;
     /* Copied from the source session by /fork: context this conversation reads but did not
@@ -97,6 +101,10 @@ char *item_image_placeholder(const struct item_image *image);
 size_t items_image_base64_bytes(const struct item *items, size_t n_items);
 size_t items_image_count(const struct item *items, size_t n_items);
 
+/* Pessimistic prompt size in tokens: text bytes at three per token, one per item, images excluded.
+ * Only for deciding what a compaction keeps verbatim, where an overestimate costs headroom. */
+long items_token_estimate(const struct item *items, size_t n_items);
+
 /* Index of the newest compaction seed, or 0 when there is none. Compaction summarizes a prefix
  * instead of discarding it, so a request built from `items` starts here, not at 0. */
 size_t items_context_floor(const struct item *items, size_t n_items);
@@ -109,6 +117,10 @@ int item_is_typed_prompt(const struct item *item);
  * prompt's turn boundary, so the kept tail ends with its own response. Returns n_items when
  * nothing is cut. */
 size_t items_user_turn_cut(const struct item *items, size_t n_items, size_t keep_user_turns);
+
+/* Index where the last `keep_user_turns` typed prompts begin, boundary included. Returns 0 when the
+ * conversation holds no more than that, which leaves a compaction nothing to summarize. */
+size_t items_keep_tail_cut(const struct item *items, size_t n_items, size_t keep_user_turns);
 
 /* One JSON Schema property advertised for a tool. Zeroed optional fields are omitted from the
  * generated schema, so `minimum` cannot express a bound of 0. */

@@ -121,6 +121,60 @@ static void test_compaction_and_continuation_follow_ancestry(void)
     session_tree_free(&tree);
 }
 
+/* A seed that keeps a tail is recorded after it, because a file only grows at the end. Replay
+ * moves it in front, so the window reads summary first and later turns extend the tail. */
+static void test_seed_splices_ahead_of_kept_tail(void)
+{
+    struct session_tree tree = {0};
+    add_exchange(&tree, 2, "first");
+    add_exchange(&tree, 5, "second");
+    session_tree_append(&tree, 8,
+                        (struct item){.kind = ITEM_USER_MESSAGE,
+                                      .text = xstrdup("summary of first"),
+                                      .origin = ITEM_ORIGIN_COMPACT_SEED,
+                                      .keep_count = 3});
+    add_exchange(&tree, 9, "third");
+    EXPECT(tree.position == 11);
+    struct session_loaded loaded = {0};
+    session_tree_export(&tree, &loaded);
+    EXPECT(loaded.n_items == 10);
+    EXPECT(loaded.n_retired == 0);
+    EXPECT_STR_EQ(loaded.items[1].text, "first");
+    EXPECT_STR_EQ(loaded.items[3].text, "summary of first");
+    EXPECT(loaded.items[3].origin == ITEM_ORIGIN_COMPACT_SEED);
+    EXPECT_STR_EQ(loaded.items[5].text, "second");
+    EXPECT_STR_EQ(loaded.items[8].text, "third");
+    EXPECT(items_context_floor(loaded.items, loaded.n_items) == 3);
+    EXPECT(loaded.n_tree == 3);
+    EXPECT(loaded.tree[0].parent == SIZE_MAX);
+    EXPECT(loaded.tree[1].parent == 0);
+    EXPECT(loaded.tree[2].parent == 1);
+    EXPECT(loaded.tree[1].position == 8);
+    EXPECT(loaded.tree[2].after_position == 11);
+    session_loaded_free(&loaded);
+    session_tree_free(&tree);
+}
+
+/* A tail longer than the conversation keeps everything and makes the seed the root. */
+static void test_seed_keep_past_root(void)
+{
+    struct session_tree tree = {0};
+    add_exchange(&tree, 3, "only");
+    session_tree_append(&tree, 6,
+                        (struct item){.kind = ITEM_USER_MESSAGE,
+                                      .text = xstrdup("summary"),
+                                      .origin = ITEM_ORIGIN_COMPACT_SEED,
+                                      .keep_count = 99});
+    struct session_loaded loaded = {0};
+    session_tree_export(&tree, &loaded);
+    EXPECT(loaded.n_items == 4);
+    EXPECT_STR_EQ(loaded.items[0].text, "summary");
+    EXPECT_STR_EQ(loaded.items[2].text, "only");
+    EXPECT(loaded.tree[0].parent == SIZE_MAX);
+    session_loaded_free(&loaded);
+    session_tree_free(&tree);
+}
+
 static void test_repeated_navigation_does_not_duplicate_items(void)
 {
     struct session_tree tree = {0};
@@ -161,6 +215,8 @@ int main(void)
     test_undo_preserves_sibling_and_can_restore_it();
     test_root_branches_and_invalid_positions();
     test_compaction_and_continuation_follow_ancestry();
+    test_seed_splices_ahead_of_kept_tail();
+    test_seed_keep_past_root();
     test_repeated_navigation_does_not_duplicate_items();
     test_empty_tree();
     T_REPORT();

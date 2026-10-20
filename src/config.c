@@ -90,6 +90,10 @@ static const struct config_setting REGISTRY[] = {
     {.key = "compact.threshold", .env_var = "HAX_COMPACT_THRESHOLD", .default_value = "85",
      .description = "Auto-compact when context usage reaches this percent of the window",
      .kind = CONFIG_KIND_INT, .min = 1, .max = 100, .editable = 1},
+    {.key = "compact.keep_turns", .env_var = "HAX_COMPACT_KEEP_TURNS", .default_value = "1",
+     .description = "User turns a compaction keeps verbatim after its summary; 0 summarizes "
+                    "everything",
+     .kind = CONFIG_KIND_INT, .min = 0, .max = 100, .editable = 1},
     {.key = "max_turns", .env_var = "HAX_MAX_TURNS", .default_value = "0",
      .description = "Model round-trips per user turn before interactive pauses for confirmation "
                     "and one-shot aborts; 0 is unlimited",

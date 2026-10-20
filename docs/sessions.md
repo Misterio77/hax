@@ -104,6 +104,12 @@ Conversation records, in order. `kind` is one of:
 Items without `origin` are ordinary typed or streamed content. `inherited: true` marks items
 `/fork` copied from the source session: context this conversation reads but did not pay for.
 
+A `compact_seed` may carry `keep`: the number of records before it that the seed keeps verbatim.
+Records only ever grow at the end, so a seed that keeps a tail is written after that tail and moved
+in front of it when the file is replayed; the model-visible window then starts with the summary and
+continues with the kept turns. Items recorded after the seed extend the kept tail, not the seed
+alone. Files without `keep` summarize everything before the seed, as older releases did.
+
 A `turn_usage` item carries `provider`, `model`, and a `usage` object: token counts (`input`,
 `output`, `cached`, `cache_write`, and `in_tokens` for uncached input), `elapsed_ms`, a cost
 breakdown ending in `cost_total` (`cost_estimated: true` when derived from catalog prices), and

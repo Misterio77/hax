@@ -424,6 +424,205 @@ static void test_resumed_session_floors_at_seed(void)
     agent_session_free(&resumed);
 }
 
+static void add_turn(struct agent_session *session, const char *prompt)
+{
+    agent_session_add_user(session, prompt);
+    agent_session_append(session,
+                         (struct item){.kind = ITEM_ASSISTANT_MESSAGE, .text = xstrdup("reply")});
+}
+
+/* One turn is summarized, the newest one survives word for word in front of which the seed is
+ * placed: a compacted conversation continues with the state it was last in. */
+static void test_keeps_recent_turn(void)
+{
+    struct agent_session session;
+    memset(&session, 0, sizeof(session));
+    session.model = xstrdup("model");
+    session.provider_id = "test";
+    add_turn(&session, "old history");
+    add_turn(&session, "recent history");
+    struct provider provider = {.name = "test", .stream = mock_stream};
+    config_set_override("compact.keep_turns", "1");
+    reset_mock(MOCK_SUCCESS);
+
+    struct compact_result result = run_compaction(&session, &provider, NULL);
+    EXPECT(result.outcome == COMPACT_COMPLETE);
+    /* The request carries the summarized turn and the prompt, not the kept one. */
+    EXPECT(mock.last_request_items == 4);
+    EXPECT(session.n_items == 8);
+    EXPECT_STR_EQ(session.items[1].text, "old history");
+    EXPECT(session.items[3].origin == ITEM_ORIGIN_COMPACT_SEED);
+    EXPECT(session.items[3].keep_count == 3);
+    EXPECT(session.items[4].kind == ITEM_TURN_BOUNDARY);
+    EXPECT_STR_EQ(session.items[5].text, "recent history");
+    EXPECT(session.items[7].kind == ITEM_TURN_USAGE);
+
+    struct context window = agent_session_context(&session);
+    EXPECT(window.n_items == 5);
+    EXPECT(window.items[0].origin == ITEM_ORIGIN_COMPACT_SEED);
+    EXPECT_STR_EQ(window.items[2].text, "recent history");
+    /* The kept turn's own footers describe the window that was just replaced. */
+    EXPECT(agent_session_last_context_tokens(&session) == -1);
+
+    config_set_override("compact.keep_turns", NULL);
+    compact_result_destroy(&result);
+    agent_session_free(&session);
+}
+
+/* compact.keep_turns = 0 restores summarizing the whole window. */
+static void test_keep_turns_zero_summarizes_all(void)
+{
+    struct agent_session session;
+    memset(&session, 0, sizeof(session));
+    session.model = xstrdup("model");
+    session.provider_id = "test";
+    add_turn(&session, "old history");
+    add_turn(&session, "recent history");
+    struct provider provider = {.name = "test", .stream = mock_stream};
+    config_set_override("compact.keep_turns", "0");
+    reset_mock(MOCK_SUCCESS);
+
+    struct compact_result result = run_compaction(&session, &provider, NULL);
+    EXPECT(result.outcome == COMPACT_COMPLETE);
+    EXPECT(mock.last_request_items == 7);
+    EXPECT(session.n_items == 9);
+    EXPECT(session.items[7].origin == ITEM_ORIGIN_COMPACT_SEED);
+    EXPECT(session.items[6].keep_count == 0);
+    struct context window = agent_session_context(&session);
+    EXPECT(window.n_items == 2);
+
+    config_set_override("compact.keep_turns", NULL);
+    compact_result_destroy(&result);
+    agent_session_free(&session);
+}
+
+/* Asking for more turns than the conversation has keeps as many as still leave something to
+ * summarize, rather than declining to compact at all. */
+static void test_keeping_more_turns_than_exist_keeps_one_fewer(void)
+{
+    struct agent_session session;
+    memset(&session, 0, sizeof(session));
+    session.model = xstrdup("model");
+    session.provider_id = "test";
+    add_turn(&session, "old history");
+    add_turn(&session, "recent history");
+    struct provider provider = {.name = "test", .stream = mock_stream};
+    config_set_override("compact.keep_turns", "2");
+    reset_mock(MOCK_SUCCESS);
+
+    struct compact_result result = run_compaction(&session, &provider, NULL);
+    EXPECT(result.outcome == COMPACT_COMPLETE);
+    EXPECT(session.n_items == 8);
+    EXPECT(session.items[3].origin == ITEM_ORIGIN_COMPACT_SEED);
+    EXPECT(session.items[3].keep_count == 3);
+    EXPECT_STR_EQ(session.items[5].text, "recent history");
+    struct context window = agent_session_context(&session);
+    EXPECT(window.n_items == 5);
+
+    config_set_override("compact.keep_turns", NULL);
+    compact_result_destroy(&result);
+    agent_session_free(&session);
+}
+
+/* A window the tail would fill leaves no room to continue, so the budget drops turns instead of
+ * keeping a window the provider would reject. */
+static void test_oversized_turn_is_summarized_instead_of_kept(void)
+{
+    struct agent_session session;
+    memset(&session, 0, sizeof(session));
+    session.model = xstrdup("model");
+    session.provider_id = "test";
+    add_turn(&session, "old history");
+    add_turn(&session, "recent history");
+    struct provider provider = {.name = "test", .stream = mock_stream};
+    config_set_override("compact.keep_turns", "1");
+    /* A 24-token window budgets 6; even one turn is larger. */
+    config_set_override("context_limit", "24");
+    reset_mock(MOCK_SUCCESS);
+
+    struct compact_result result = run_compaction(&session, &provider, NULL);
+    EXPECT(result.outcome == COMPACT_COMPLETE);
+    /* Everything is summarized, as if nothing were kept. */
+    EXPECT(mock.last_request_items == 7);
+    EXPECT(session.n_items == 9);
+    EXPECT(session.items[7].origin == ITEM_ORIGIN_COMPACT_SEED);
+    EXPECT(session.items[7].keep_count == 0);
+    EXPECT(agent_session_context(&session).n_items == 2);
+
+    config_set_override("context_limit", NULL);
+    config_set_override("compact.keep_turns", NULL);
+    compact_result_destroy(&result);
+    agent_session_free(&session);
+}
+
+/* The budget only trims: a window with room keeps the turn it was asked to. */
+static void test_budget_keeps_a_turn_that_fits(void)
+{
+    struct agent_session session;
+    memset(&session, 0, sizeof(session));
+    session.model = xstrdup("model");
+    session.provider_id = "test";
+    add_turn(&session, "old history");
+    add_turn(&session, "recent history");
+    struct provider provider = {.name = "test", .stream = mock_stream};
+    config_set_override("compact.keep_turns", "1");
+    config_set_override("context_limit", "4096");
+    reset_mock(MOCK_SUCCESS);
+
+    struct compact_result result = run_compaction(&session, &provider, NULL);
+    EXPECT(result.outcome == COMPACT_COMPLETE);
+    EXPECT(session.items[3].origin == ITEM_ORIGIN_COMPACT_SEED);
+    EXPECT(session.items[3].keep_count == 3);
+
+    config_set_override("context_limit", NULL);
+    config_set_override("compact.keep_turns", NULL);
+    compact_result_destroy(&result);
+    agent_session_free(&session);
+}
+
+/* The kept tail is recorded after the seed and restored ahead of it, so a resumed conversation
+ * sees the same window without carrying replay state in the file. */
+static void test_kept_tail_survives_reload(void)
+{
+    struct agent_session session;
+    memset(&session, 0, sizeof(session));
+    session.model = xstrdup("model");
+    session.provider_id = "test";
+    add_turn(&session, "old history");
+    add_turn(&session, "recent history");
+    struct provider provider = {.name = "test", .stream = mock_stream};
+    struct session_log *session_log = session_log_open("test", "model", NULL, NULL, NULL);
+    EXPECT(session_log != NULL);
+    session_log_append(session_log, session.items, session.n_items);
+    char *path = xstrdup(session_log_path(session_log));
+    config_set_override("compact.keep_turns", "1");
+    reset_mock(MOCK_SUCCESS);
+
+    struct compact_result result = run_compaction(&session, &provider, session_log);
+    EXPECT(result.outcome == COMPACT_COMPLETE);
+    session_log_close(session_log);
+    agent_session_free(&session);
+    config_set_override("compact.keep_turns", NULL);
+
+    struct agent_session resumed;
+    memset(&resumed, 0, sizeof(resumed));
+    EXPECT(session_load(path, &resumed.items, &resumed.n_items, NULL) == 0);
+    resumed.cap_items = resumed.n_items;
+    EXPECT(resumed.n_items == 8);
+    EXPECT_STR_EQ(resumed.items[1].text, "old history");
+    EXPECT(resumed.items[3].origin == ITEM_ORIGIN_COMPACT_SEED);
+    EXPECT(resumed.items[3].keep_count == 3);
+    EXPECT_STR_EQ(resumed.items[5].text, "recent history");
+    struct context window = agent_session_context(&resumed);
+    EXPECT(window.n_items == 5);
+    EXPECT(window.items[0].origin == ITEM_ORIGIN_COMPACT_SEED);
+    EXPECT_STR_EQ(window.items[2].text, "recent history");
+
+    free(path);
+    compact_result_destroy(&result);
+    agent_session_free(&resumed);
+}
+
 static void test_preserves_failure(void)
 {
     struct agent_session session;
@@ -513,6 +712,12 @@ int main(void)
     test_keeps_one_session();
     test_tool_call_retries_are_bounded();
     test_resumed_session_floors_at_seed();
+    test_keeps_recent_turn();
+    test_keep_turns_zero_summarizes_all();
+    test_keeping_more_turns_than_exist_keeps_one_fewer();
+    test_oversized_turn_is_summarized_instead_of_kept();
+    test_budget_keeps_a_turn_that_fits();
+    test_kept_tail_survives_reload();
     test_preserves_failure();
     test_rejects_empty_summary();
     test_rejects_incomplete_response();

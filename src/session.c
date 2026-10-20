@@ -232,6 +232,8 @@ json_t *item_to_json(const struct item *item)
     json_set_optional_string(object, "provider", item->provider);
     json_set_optional_string(object, "model", item->model);
     json_set_optional_string(object, "origin", origin_to_str(item->origin));
+    if (item->keep_count)
+        json_object_set_new(object, "keep", json_integer((json_int_t)item->keep_count));
     if (item->usage)
         json_object_set_new(object, "usage", turn_usage_to_json(item->usage));
     if (item->inherited)
@@ -277,6 +279,9 @@ int item_from_json(const json_t *object, struct item *out)
     out->provider = json_dup_string(object, "provider");
     out->model = json_dup_string(object, "model");
     out->origin = json_get_item_origin(object);
+    json_t *keep = json_object_get(object, "keep");
+    if (json_is_integer(keep) && json_integer_value(keep) > 0)
+        out->keep_count = (size_t)json_integer_value(keep);
     if (kind == ITEM_TURN_USAGE)
         out->usage = turn_usage_from_json(json_object_get(object, "usage"));
     out->inherited = json_is_true(json_object_get(object, "inherited"));
@@ -954,6 +959,9 @@ int session_fork_file(const char *source_path, const struct item *items, size_t 
     for (size_t i = 0; i < n_items; i++) {
         struct item copy = items[i];
         copy.inherited = 1;
+        /* The live conversation is already ordered summary-first, so this file needs no splice;
+         * a kept count here would move the summarized prefix's tail behind the seed instead. */
+        copy.keep_count = 0;
         json_t *object = item_to_json(&copy);
         int written = write_json_line(destination, object);
         json_decref(object);

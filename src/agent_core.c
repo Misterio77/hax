@@ -442,10 +442,11 @@ long agent_session_last_context_tokens(const struct agent_session *session)
     /* A summarization request reports the window it summarized, not the conversation's: reading
      * it after a successful compaction would immediately recompact the seed, and after a failed
      * one it would stand in for the last agent turn. Footers recorded before origins were
-     * stamped are recognized by position, right after the seed. */
+     * stamped are recognized by position, right after the seed. The kept tail's own footers are
+     * skipped with it: they were counted by the requests that produced them. */
     size_t floor = 0;
     if (window.n_items > 0 && window.items[0].origin == ITEM_ORIGIN_COMPACT_SEED) {
-        floor = 1;
+        floor = 1 + window.items[0].keep_count;
         while (floor < window.n_items && window.items[floor].kind == ITEM_TURN_USAGE)
             floor++;
     }

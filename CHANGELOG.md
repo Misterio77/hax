@@ -24,6 +24,12 @@ notes (see [docs/releasing.md](docs/releasing.md)).
 
 ### Changed
 
+- Compaction now keeps the newest user turn verbatim after its summary instead of replacing the
+  whole window with prose, so work continues from the exact state it was last in. Set
+  `compact.keep_turns` to keep more turns, or `0` for the previous summarize-everything behavior.
+  The kept tail is capped at a quarter of a known context window, so a turn too large to keep is
+  summarized rather than left to overflow it.
+  See [docs/usage.md](docs/usage.md#context-compaction-and-usage).
 - Prompts are sent without leading blank lines or trailing whitespace, so a paste or Ctrl+G edit
   that ends in a newline no longer echoes as empty rows. The first line keeps its indentation.
   A prompt that is only whitespace sends nothing, and `-p` rejects it as empty.

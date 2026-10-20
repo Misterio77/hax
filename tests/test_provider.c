@@ -35,6 +35,26 @@ static void test_item_image_totals(void)
         item_free(&items[i]);
 }
 
+/* The estimate is a bound for choosing what a compaction keeps, so it must never come out small:
+ * every item counts, and text counts at a pessimistic three bytes per token. */
+static void test_item_token_estimate(void)
+{
+    struct item empty[] = {{.kind = ITEM_TURN_BOUNDARY}, {.kind = ITEM_USER_MESSAGE}};
+    EXPECT(items_token_estimate(empty, 2) == 2);
+
+    struct item items[] = {
+        {.kind = ITEM_USER_MESSAGE, .text = (char *)"0123456789"}, /* 10 bytes */
+        {.kind = ITEM_TOOL_CALL, .tool_name = (char *)"read", .tool_arguments_json = (char *)"{}"},
+        {.kind = ITEM_TOOL_RESULT, .output = (char *)"0123456789012345678901234567890"},
+        {.kind = ITEM_REASONING, .reasoning_text = (char *)"123"},
+    };
+    /* Text, arguments, tool name, output, and reasoning at three bytes per token, plus one per
+     * item: 3 + (0 + 1) + 10 + 1 with four items' framing. */
+    EXPECT(items_token_estimate(items, 4) == 19);
+    /* A shorter prefix only ever counts less. */
+    EXPECT(items_token_estimate(items, 3) < items_token_estimate(items, 4));
+}
+
 static void test_item_image_placeholder(void)
 {
     struct item_image image = {
@@ -244,6 +264,7 @@ static void test_provenance_matching(void)
 
 int main(void)
 {
+    test_item_token_estimate();
     test_item_image_totals();
     test_item_image_placeholder();
     test_item_free();

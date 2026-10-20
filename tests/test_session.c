@@ -933,6 +933,52 @@ static void test_fork_writes_prefix_as_inherited_without_touching_source(void)
     free(source_path);
 }
 
+/* A kept count says where a seed sits in its own file. A fork writes the live conversation, which
+ * is already summary-first, so carrying the count over would move the summarized prefix's tail
+ * behind the seed instead. */
+static void test_fork_drops_kept_seed_count(void)
+{
+    use_fresh_session_state();
+    struct item conversation[] = {
+        {.kind = ITEM_TURN_BOUNDARY},
+        {.kind = ITEM_USER_MESSAGE, .text = xstrdup("t0")},
+        {.kind = ITEM_ASSISTANT_MESSAGE, .text = xstrdup("r0")},
+        {.kind = ITEM_TURN_BOUNDARY},
+        {.kind = ITEM_USER_MESSAGE, .text = xstrdup("t1")},
+        {.kind = ITEM_ASSISTANT_MESSAGE, .text = xstrdup("r1")},
+        {.kind = ITEM_USER_MESSAGE,
+         .text = xstrdup("summary"),
+         .origin = ITEM_ORIGIN_COMPACT_SEED,
+         .keep_count = 3},
+    };
+    size_t count = sizeof(conversation) / sizeof(conversation[0]);
+    char *source_path = write_session("pa", "ma", NULL, NULL, conversation, count);
+
+    struct item *items;
+    size_t n;
+    EXPECT(session_load(source_path, &items, &n, NULL) == 0);
+    EXPECT(n == 7);
+    EXPECT(items[3].origin == ITEM_ORIGIN_COMPACT_SEED && items[3].keep_count == 3);
+    EXPECT_STR_EQ(items[5].text, "t1");
+
+    struct session_header selection = {.provider = "pa", .model = "ma"};
+    char *fork_path = NULL;
+    EXPECT(session_fork_file(source_path, items, n, &selection, &fork_path) == 0);
+    free_items(items, n);
+    if (fork_path) {
+        EXPECT(session_load(fork_path, &items, &n, NULL) == 0);
+        EXPECT(n == 7);
+        EXPECT(items[3].origin == ITEM_ORIGIN_COMPACT_SEED && items[3].keep_count == 0);
+        EXPECT_STR_EQ(items[5].text, "t1");
+        EXPECT(items_context_floor(items, n) == 3);
+        free_items(items, n);
+        free(fork_path);
+    }
+    free(source_path);
+    for (size_t i = 0; i < count; i++)
+        item_free(&conversation[i]);
+}
+
 static void test_selection_metadata_tracks_productive_switches(void)
 {
     use_fresh_session_state();
@@ -1321,6 +1367,7 @@ int main(void)
     test_nested_undo_records_replay_in_order();
     test_user_turn_records_sum_worked_time();
     test_fork_writes_prefix_as_inherited_without_touching_source();
+    test_fork_drops_kept_seed_count();
     test_selection_metadata_tracks_productive_switches();
     test_discarded_selection_stays_out_of_log();
     test_undo_keeps_effective_selection();

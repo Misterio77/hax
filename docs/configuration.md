@@ -256,6 +256,7 @@ provider-dependent.
 | `keep_awake` | `HAX_KEEP_AWAKE` | on | Best-effort idle-sleep inhibition while a turn runs. |
 | `compact.auto` | `HAX_COMPACT_AUTO` | on | Automatically summarize the conversation near the context limit. |
 | `compact.threshold` | `HAX_COMPACT_THRESHOLD` | `85` | Context percentage that triggers automatic compaction. |
+| `compact.keep_turns` | `HAX_COMPACT_KEEP_TURNS` | `1` | User turns a compaction keeps verbatim after its summary. `0` summarizes everything. |
 | `max_turns` | `HAX_MAX_TURNS` | `0` | Model round-trips per user turn before hax pauses (interactive) or aborts (one-shot). `0` is unlimited. |
 
 `theme=auto` respects `NO_COLOR`, terminal color support, and `COLORFGBG` when available. Terminals

@@ -152,11 +152,15 @@ static void summary_request_append(struct summary_request *request, struct item 
     request->items[request->count++] = item;
 }
 
+/* Only the prefix is summarized: whatever the seed keeps is still in the window verbatim, so
+ * summarizing it would pay twice and could drop detail the tail states plainly. */
 static void summary_request_init(struct summary_request *request,
-                                 const struct compact_params *params)
+                                 const struct compact_params *params, size_t summarize_items)
 {
     memset(request, 0, sizeof(*request));
     request->base_context = agent_session_context(params->session);
+    if (summarize_items < request->base_context.n_items)
+        request->base_context.n_items = summarize_items;
     request->base_context.image_input =
         model_meta_image_input(params->provider, params->session->model);
     request->base_context.session_id = session_log_id(params->session_log);
@@ -232,10 +236,10 @@ static void append_rejected_response(struct summary_request *request, struct ite
 }
 
 static char *generate_summary(const struct compact_params *params, struct compact_sink *sink,
-                              int *attempt_count)
+                              int *attempt_count, size_t summarize_items)
 {
     struct summary_request request;
-    summary_request_init(&request, params);
+    summary_request_init(&request, params, summarize_items);
     char *summary = NULL;
 
     /* Advertising the normal tools preserves the provider's cached request prefix. Calls are
@@ -272,15 +276,63 @@ static char *generate_summary(const struct compact_params *params, struct compac
     return summary;
 }
 
-/* The boundary prevents the seed from rendering as part of the preceding assistant turn. */
-static void append_summary_seed(struct agent_session *session, const char *summary)
+/* The boundary prevents the seed from rendering as part of the preceding assistant turn. A kept
+ * tail follows the seed, and opening it with its own turn boundary already separates the two. */
+static void append_summary_seed(struct agent_session *session, const char *summary, size_t keep)
 {
-    agent_session_add_boundary(session);
+    if (keep == 0)
+        agent_session_add_boundary(session);
     agent_session_append(session, (struct item){
                                       .kind = ITEM_USER_MESSAGE,
                                       .text = build_summary_seed(summary),
                                       .origin = ITEM_ORIGIN_COMPACT_SEED,
+                                      .keep_count = keep,
                                   });
+}
+
+/* Records can only be appended, so the seed is written after the turns it keeps and moved in front
+ * of them in memory. The replayed path does the same, which keeps a live session and a resumed one
+ * ordered alike. */
+static void splice_seed_before_tail(struct agent_session *session, size_t keep_from,
+                                    size_t seed_index)
+{
+    if (seed_index <= keep_from)
+        return;
+    struct item seed = session->items[seed_index];
+    memmove(&session->items[keep_from + 1], &session->items[keep_from],
+            (seed_index - keep_from) * sizeof(*session->items));
+    session->items[keep_from] = seed;
+}
+
+/* A tail that fills the window would leave no room for the summary or the next turn, so a known
+ * window caps it at a quarter of itself. */
+#define COMPACT_KEEP_TURNS_BUDGET_DIVISOR 4
+
+/* The kept tail is measured in whole user turns rather than tokens: a count never splits a tool
+ * batch, and the newest turn is the state a continued conversation actually resumes from. A turn
+ * too large for the budget is dropped from the tail rather than split, so an oversized turn
+ * degrades to summarizing everything instead of leaving a window the provider will reject. */
+static size_t compact_keep_floor(const struct compact_params *params)
+{
+    struct agent_session *session = params->session;
+    int keep_turns = config_int("compact.keep_turns");
+    if (keep_turns <= 0)
+        return session->n_items;
+    long limit = model_meta_context(params->provider, session->model);
+    long budget = limit > 0 ? limit / COMPACT_KEEP_TURNS_BUDGET_DIVISOR : -1;
+
+    for (size_t turns = (size_t)keep_turns; turns > 0; turns--) {
+        size_t cut = items_keep_tail_cut(session->items, session->n_items, turns);
+        /* A zero cut means there are no more turns than requested, so nothing older would be left
+         * to summarize; asking for fewer is the only way to keep something. */
+        if (cut == 0)
+            continue;
+        if (budget < 0 ||
+            items_token_estimate(session->items + cut, session->n_items - cut) <= budget)
+            return cut;
+    }
+    /* Retention never turns compaction off: when no tail fits, everything is summarized. */
+    return session->n_items;
 }
 
 static void flush_compaction_logs(const struct compact_params *params)
@@ -326,10 +378,18 @@ void compact_run(const struct compact_params *params, struct compact_result *res
                              params->session->model, params->session->model_label,
                              params->session->effort, config_str("preset"));
 
+    /* An empty window — a seed with nothing after it — has nothing to summarize. */
+    size_t floor = items_context_floor(params->session->items, params->session->n_items);
+    size_t keep_from = compact_keep_floor(params);
+    if (keep_from <= floor) {
+        result->outcome = COMPACT_EMPTY;
+        return;
+    }
+
     struct compact_sink sink = {.hooks = &params->hooks};
     turn_init(&sink.turn);
     attempt_log_init(&sink.attempt_log);
-    char *summary = generate_summary(params, &sink, &result->attempts);
+    char *summary = generate_summary(params, &sink, &result->attempts, keep_from - floor);
     int cancelled = params->hooks.is_cancelled && params->hooks.is_cancelled(params->hooks.user);
     if (cancelled) {
         free(summary);
@@ -354,12 +414,16 @@ void compact_run(const struct compact_params *params, struct compact_result *res
 
     /* Rejected attempts are part of the summarized prefix; accepted usage follows the seed. */
     size_t accepted_usage_index = sink.attempt_log.count ? sink.attempt_log.count - 1 : 0;
+    size_t keep = params->session->n_items - keep_from;
+    size_t seed_index = params->session->n_items;
     append_attempt_usage(params, &sink.attempt_log, 0, accepted_usage_index);
-    append_summary_seed(params->session, summary);
+    append_summary_seed(params->session, summary, keep);
     free(summary);
     append_attempt_usage(params, &sink.attempt_log, accepted_usage_index, sink.attempt_log.count);
     attempt_log_free(&sink.attempt_log);
+    /* Records keep append order; only the live array reads summary-first. */
     flush_compaction_logs(params);
+    splice_seed_before_tail(params->session, keep_from, seed_index);
     result->outcome = COMPACT_COMPLETE;
 }
 
