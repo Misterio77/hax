@@ -48,6 +48,7 @@ test_sources = [
     'test_select_model.c',
     'test_session.c',
     'test_session_prune.c',
+    'test_session_tree.c',
     'test_slash.c',
     'test_tool_schema.c',
     'test_trace.c',
@@ -58,6 +59,7 @@ test_sources = [
     'commands/test_login.c',
     'commands/test_session_cmd.c',
     'commands/test_tasks.c',
+    'commands/test_tree.c',
 
     'providers/test_anthropic_body.c',
     'providers/test_anthropic_events.c',
@@ -179,6 +181,7 @@ e2e_scenarios = [
     'repl_complete',
     'repl_interrupt',
     'repl_smoke',
+    'repl_tree',
 ]
 
 python = find_program('python3')

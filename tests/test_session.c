@@ -1139,10 +1139,164 @@ static void test_load_budgets_images_from_compaction_seed(void)
     unlink(path);
 }
 
+static void test_navigation_round_trip_and_append(void)
+{
+    setenv("XDG_STATE_HOME", t_tempdir(), 1);
+    struct session_log *log = session_log_open("pa", "ma", NULL, NULL, NULL);
+    struct item original[] = {
+        {.kind = ITEM_TURN_BOUNDARY},
+        {.kind = ITEM_USER_MESSAGE, .text = "first"},
+        {.kind = ITEM_ASSISTANT_MESSAGE, .text = "first reply"},
+        {.kind = ITEM_TURN_BOUNDARY},
+        {.kind = ITEM_USER_MESSAGE, .text = "original"},
+        {.kind = ITEM_ASSISTANT_MESSAGE, .text = "original reply"},
+    };
+    session_log_append(log, original, 6);
+    session_log_user_turn(log, 100);
+    char *path = xstrdup(session_log_path(log));
+    struct session_loaded loaded;
+    EXPECT(session_load_all(path, &loaded) == 0);
+    EXPECT(loaded.n_tree == 2);
+    size_t before_second = loaded.tree[1].position;
+    size_t original_tip = loaded.tree[1].after_position;
+    session_loaded_free(&loaded);
+
+    EXPECT(session_load_at(path, before_second, &loaded) == 0);
+    EXPECT(loaded.n_items == 3);
+    EXPECT(loaded.n_retired == 3);
+    EXPECT(session_log_navigate(log, before_second, loaded.n_items) == 0);
+    session_loaded_free(&loaded);
+
+    struct item alternative[] = {
+        original[0],
+        original[1],
+        original[2],
+        {.kind = ITEM_TURN_BOUNDARY},
+        {.kind = ITEM_USER_MESSAGE, .text = "alternative"},
+        {.kind = ITEM_ASSISTANT_MESSAGE, .text = "alternative reply"},
+    };
+    session_log_set_meta(log, "pb", "mb", NULL, "high", NULL);
+    session_log_append(log, alternative, 6);
+    session_log_user_turn(log, 30);
+    EXPECT(session_load_all(path, &loaded) == 0);
+    EXPECT(loaded.n_items == 6);
+    EXPECT(loaded.n_retired == 3);
+    EXPECT(loaded.n_tree == 3);
+    EXPECT_STR_EQ(loaded.items[4].text, "alternative");
+    EXPECT(loaded.worked_ms == 130);
+    session_loaded_free(&loaded);
+
+    EXPECT(session_load_at(path, original_tip, &loaded) == 0);
+    EXPECT_STR_EQ(loaded.items[4].text, "original");
+    EXPECT_STR_EQ(loaded.meta.model, "mb");
+    EXPECT(session_log_navigate(log, original_tip, loaded.n_items) == 0);
+    session_loaded_free(&loaded);
+    session_log_close(log);
+
+    EXPECT(session_load_all(path, &loaded) == 0);
+    EXPECT(loaded.n_items == 6);
+    EXPECT(loaded.n_retired == 3);
+    EXPECT_STR_EQ(loaded.items[4].text, "original");
+    EXPECT(loaded.worked_ms == 130);
+    log = session_log_resume(path, "pb", "mb", "high", NULL, loaded.n_items);
+    session_loaded_free(&loaded);
+    struct item continued[] = {
+        original[0],
+        original[1],
+        original[2],
+        original[3],
+        original[4],
+        original[5],
+        {.kind = ITEM_ASSISTANT_MESSAGE, .text = "continued original"},
+    };
+    session_log_append(log, continued, 7);
+    session_log_close(log);
+    EXPECT(session_load_all(path, &loaded) == 0);
+    EXPECT(loaded.n_items == 7);
+    EXPECT(loaded.n_retired == 3);
+    EXPECT_STR_EQ(loaded.items[6].text, "continued original");
+    session_loaded_free(&loaded);
+    EXPECT(session_load_at(path, 99999, &loaded) == -1);
+    EXPECT(loaded.items == NULL);
+    EXPECT(loaded.tree == NULL);
+    session_loaded_free(&loaded);
+    free(path);
+}
+
+static void test_navigation_uses_physical_records_and_repairs_tools(void)
+{
+    char *path = xasprintf("%s/session.jsonl", t_tempdir());
+    FILE *file = fopen(path, "w");
+    EXPECT(file != NULL);
+    if (!file) {
+        free(path);
+        return;
+    }
+    fputs("{\"type\":\"session\",\"version\":1}\n"
+          "{\"kind\":\"user\",\"text\":\"original\"}\n"
+          "torn record\n"
+          "\n"
+          "{\"kind\":\"tool_call\",\"call_id\":\"dangling\"}\n"
+          "{\"type\":\"navigate\",\"position\":0}\n"
+          "{\"kind\":\"user\",\"text\":\"alternative\"}\n"
+          "{\"kind\":\"assistant\",\"text\":\"alternative reply\"}\n"
+          "{\"type\":\"navigate\",\"position\":5}\n",
+          file);
+    fclose(file);
+    struct session_loaded loaded;
+    EXPECT(session_load_all(path, &loaded) == 0);
+    EXPECT(loaded.n_items == 1);
+    EXPECT_STR_EQ(loaded.items[0].text, "original");
+    EXPECT(loaded.n_retired == 2);
+    EXPECT(loaded.n_tree == 2);
+    session_loaded_free(&loaded);
+    free(path);
+}
+
+static void test_invalid_navigation_and_future_formats_fail_closed(void)
+{
+    const char *records[] = {
+        "{\"type\":\"session\",\"version\":999}\n",
+        "{\"type\":\"session\",\"version\":1}\n"
+        "{\"kind\":\"user\",\"text\":\"prompt\"}\n"
+        "{\"type\":\"navigate\",\"version\":999,\"position\":0}\n",
+        "{\"kind\":\"user\",\"text\":\"prompt\"}\n"
+        "{\"type\":\"navigate\",\"position\":999}\n",
+        "{\"kind\":\"user\",\"text\":\"prompt\"}\n"
+        "{\"type\":\"navigate\",\"position\":-1}\n",
+        "{\"kind\":\"user\",\"text\":\"prompt\"}\n"
+        "{\"type\":\"navigate\"}\n",
+    };
+    char *path = xasprintf("%s/session.jsonl", t_tempdir());
+    for (size_t i = 0; i < sizeof(records) / sizeof(records[0]); i++) {
+        FILE *file = fopen(path, "w");
+        EXPECT(file != NULL);
+        if (!file)
+            break;
+        fputs(records[i], file);
+        fclose(file);
+        struct session_loaded loaded;
+        EXPECT(session_load_all(path, &loaded) == -1);
+        EXPECT(loaded.items == NULL);
+        EXPECT(loaded.tree == NULL);
+        session_loaded_free(&loaded);
+        if (i < 2) {
+            struct session_meta meta;
+            EXPECT(session_read_meta(path, &meta) == -1);
+            EXPECT(meta.model == NULL);
+            session_meta_free(&meta);
+        }
+    }
+    free(path);
+}
+
 int main(void)
 {
     /* Outside any repository, so recorded sessions neither run git nor depend on the checkout. */
     EXPECT(chdir(t_tempdir()) == 0);
+    test_invalid_navigation_and_future_formats_fail_closed();
+    test_navigation_round_trip_and_append();
+    test_navigation_uses_physical_records_and_repairs_tools();
     test_item_codec_round_trip();
     test_recording_control();
     test_session_round_trip();

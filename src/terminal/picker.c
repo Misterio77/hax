@@ -256,7 +256,7 @@ static void render_search(struct buf *output, const struct picker *picker, int t
     buf_append_str(output, ANSI_DIM);
     buf_append_str(output, icon);
 
-    if (picker->core.query.len == 0) {
+    if (picker->core.query.len == 0 && !picker->core.explicit_search) {
         char placeholder[48];
         snprintf(placeholder, sizeof placeholder, "type to search %zu item%s",
                  picker->core.options->item_count,
@@ -275,7 +275,8 @@ static void render_search(struct buf *output, const struct picker *picker, int t
     int query_cells = show_count ? text_cells - count_cells - 2 : text_cells;
 
     buf_append_str(output, ANSI_BOLD_OFF); /* query in normal intensity */
-    append_clipped_text(output, picker->core.query.data, query_cells, use_utf8);
+    append_clipped_text(output, picker->core.query.data ? picker->core.query.data : "", query_cells,
+                        use_utf8);
 
     if (show_count) {
         buf_append_str(output, "  ");
@@ -575,6 +576,7 @@ static void paint(struct picker *picker)
 enum picker_input_result {
     PICKER_INPUT_CONTINUE,
     PICKER_INPUT_ACCEPT,
+    PICKER_INPUT_ALTERNATE,
     PICKER_INPUT_CANCEL,
 };
 
@@ -617,11 +619,20 @@ static enum picker_input_result process_input_byte(struct picker_core *core, uns
      * fzf. */
     if (byte == 0x0d)
         return core->match_count ? PICKER_INPUT_ACCEPT : PICKER_INPUT_CONTINUE;
+    if (core->options->alternate_key && byte == '/' && core->query.len == 0 &&
+        !core->explicit_search) {
+        core->explicit_search = 1;
+        return PICKER_INPUT_CONTINUE;
+    }
+    if (core->options->alternate_key && byte == core->options->alternate_key &&
+        core->query.len == 0 && !core->explicit_search)
+        return core->match_count ? PICKER_INPUT_ALTERNATE : PICKER_INPUT_CONTINUE;
     if (byte == 0x7f || byte == 0x08) { /* Backspace */
         picker_core_truncate_query(core, utf8_prev(core->query.data, core->query.len));
         return PICKER_INPUT_CONTINUE;
     }
     if (byte == 0x15) { /* Ctrl-U */
+        core->explicit_search = 0;
         picker_core_truncate_query(core, 0);
         return PICKER_INPUT_CONTINUE;
     }
@@ -641,6 +652,8 @@ static enum picker_input_result process_input_byte(struct picker_core *core, uns
         unsigned char next_byte;
         if (read_byte_timeout(&next_byte, ESC_TIMEOUT_MS) <= 0)
             return PICKER_INPUT_CANCEL;
+        if (core->options->alternate_key && next_byte == core->options->alternate_key)
+            return core->match_count ? PICKER_INPUT_ALTERNATE : PICKER_INPUT_CONTINUE;
         struct escape_reader reader = {.pending_byte = next_byte};
         enum input_action action = input_core_decode_escape(read_escape_byte, &reader);
         apply_escape_action(core, action);
@@ -665,6 +678,8 @@ static enum picker_input_result process_input_byte(struct picker_core *core, uns
 
 long picker_run(const struct picker_opts *options)
 {
+    if (options && options->alternate_selected)
+        *options->alternate_selected = 0;
     if (!options || !isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO))
         return -1;
     if (options->item_count == 0) {
@@ -708,7 +723,9 @@ long picker_run(const struct picker_opts *options)
         enum picker_input_result input_result = process_input_byte(&picker.core, byte);
         if (input_result == PICKER_INPUT_CANCEL)
             break;
-        if (input_result == PICKER_INPUT_ACCEPT) {
+        if (input_result == PICKER_INPUT_ACCEPT || input_result == PICKER_INPUT_ALTERNATE) {
+            if (options->alternate_selected)
+                *options->alternate_selected = input_result == PICKER_INPUT_ALTERNATE;
             result = (long)picker.core.matches[picker.core.selection];
             break;
         }

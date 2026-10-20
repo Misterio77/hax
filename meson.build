@@ -99,6 +99,7 @@ sources = files(
     'src/session.c',
     'src/session_picker.c',
     'src/session_prune.c',
+    'src/session_tree.c',
     'src/slash.c',
     'src/tool_schema.c',
     'src/trace.c',
@@ -109,6 +110,7 @@ sources = files(
     'src/commands/login.c',
     'src/commands/session_cmd.c',
     'src/commands/tasks.c',
+    'src/commands/tree.c',
 
     'src/providers/anthropic_body.c',
     'src/providers/anthropic_events.c',

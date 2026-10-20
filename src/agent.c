@@ -45,6 +45,8 @@
 #include "terminal/ui.h"
 #include "terminal/vt_resolve.h"
 #include "terminal/width.h"
+#include "text/display_safe.h"
+#include "text/width.h"
 #include "tools/bash_process.h"
 #include "tools/task_registry.h"
 
@@ -838,6 +840,70 @@ void agent_fork(struct agent_state *state, size_t turn_index)
     session->worked_ms = 0;
     session->last_user_turn_ms = -1;
     reshape_after_cut(state, cut_index, turn_index, "forked", 0);
+}
+
+int agent_navigate_tree(struct agent_state *state, size_t position, const char *prompt, int edit)
+{
+    struct task_info *tasks;
+    size_t task_count = task_list(&tasks);
+    free(tasks);
+    if (task_count > 0) {
+        ui_error("collect or stop background tasks before switching branches");
+        disp_sync_external_line(&state->render->disp);
+        return -1;
+    }
+    if (!session_log_materialized(state->session_log)) {
+        ui_error("/tree needs session recording (it is disabled or unavailable)");
+        disp_sync_external_line(&state->render->disp);
+        return -1;
+    }
+
+    struct agent_session *session = state->session;
+    agent_flush_logs(state->transcript, state->session_log, session->items, session->n_items);
+    struct session_loaded loaded;
+    if (session_load_at(session_log_path(state->session_log), position, &loaded) != 0) {
+        ui_error("could not read the selected branch; conversation left unchanged");
+        disp_sync_external_line(&state->render->disp);
+        return -1;
+    }
+    if (session_log_navigate(state->session_log, position, loaded.n_items) != 0) {
+        session_loaded_free(&loaded);
+        ui_error("could not record the branch switch; conversation left unchanged");
+        disp_sync_external_line(&state->render->disp);
+        return -1;
+    }
+
+    char *label = prompt ? xstrdup(prompt) : NULL;
+    agent_session_adopt(session, &loaded);
+    session_loaded_free(&loaded);
+    clear_resume_state(state);
+    if (!edit) {
+        enum agent_resume_tail tail = agent_session_resume_tail(session);
+        if (tail == AGENT_RESUME_TAIL_MARKED || tail == AGENT_RESUME_TAIL_USER)
+            state->resume_reason = AGENT_RESUME_INTERRUPTED;
+    }
+    free(state->pending_preseed);
+    state->pending_preseed = edit ? xstrdup(label) : NULL;
+    transcript_log_reset(state->transcript, session->system_prompt, session->tools,
+                         session->n_tools);
+    transcript_log_append(state->transcript, session->items, session->n_items);
+
+    char *flat = label ? flatten_for_display(label) : NULL;
+    char *preview = flat ? truncate_for_display(flat, 80) : NULL;
+    render_open_block(state->render);
+    disp_write_ansi(&state->render->disp, ANSI_DIM);
+    if (preview)
+        disp_printf(&state->render->disp, "switched to %s: %s · ctrl-o for history",
+                    edit ? "before" : "after", preview);
+    else
+        disp_printf(&state->render->disp, "switched conversation position · ctrl-o for history");
+    disp_write_ansi(&state->render->disp, ANSI_RESET);
+    disp_putc(&state->render->disp, '\n');
+    disp_flush(&state->render->disp);
+    free(preview);
+    free(flat);
+    free(label);
+    return 0;
 }
 
 /* Compaction has no pause seam, so either interrupt cancels the retriable transaction. */

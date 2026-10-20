@@ -772,10 +772,123 @@ static void test_apply_settings_records_switch(void)
     fixture_free(&f);
 }
 
+struct navigation_call {
+    struct agent_state *state;
+    size_t position;
+    const char *prompt;
+    int edit;
+    int result;
+};
+
+static void do_navigation(void *user)
+{
+    struct navigation_call *call = user;
+    call->result = agent_navigate_tree(call->state, call->position, call->prompt, call->edit);
+}
+
+static void test_tree_navigation_stages_draft_without_replaying(void)
+{
+    set_state_dir();
+    struct fixture f;
+    fixture_init(&f);
+    add_turn(&f.session, "first", "first reply");
+    add_turn(&f.session, "second", "do not replay this reply");
+    f.state.session_log = session_log_open("prov-x", "model-a", NULL, NULL, NULL);
+    session_log_append(f.state.session_log, f.session.items, f.session.n_items);
+    char *path = xstrdup(session_log_path(f.state.session_log));
+    struct session_loaded loaded;
+    EXPECT(session_load_all(path, &loaded) == 0);
+    size_t position = loaded.tree[1].position;
+    session_loaded_free(&loaded);
+    f.state.resume_reason = AGENT_RESUME_INTERRUPTED;
+    f.state.compaction_deferred = 1;
+    struct navigation_call call = {
+        .state = &f.state,
+        .position = position,
+        .prompt = agent_user_turn_text(&f.session, 1),
+        .edit = 1,
+    };
+    char *out = t_capture_stdout(do_navigation, &call);
+    EXPECT(call.result == 0);
+    EXPECT(agent_user_turn_count(&f.session) == 1);
+    EXPECT_STR_EQ(f.state.pending_preseed, "second");
+    EXPECT(f.state.resume_reason == AGENT_RESUME_NONE);
+    EXPECT(f.state.compaction_deferred == 0);
+    EXPECT(strstr(out, "switched to before: second") != NULL);
+    EXPECT(strstr(out, "first reply") == NULL);
+    EXPECT(strstr(out, "do not replay this reply") == NULL);
+    free(out);
+    EXPECT(session_load_all(path, &loaded) == 0);
+    EXPECT(loaded.n_items == f.session.n_items);
+    EXPECT(loaded.n_retired == 3);
+    session_loaded_free(&loaded);
+    free(f.state.pending_preseed);
+    session_log_close(f.state.session_log);
+    free(path);
+    fixture_free(&f);
+}
+
+static void test_tree_continue_after_ancestor_excludes_its_descendants(void)
+{
+    set_state_dir();
+    struct fixture f;
+    fixture_init(&f);
+    add_turn(&f.session, "first", "first reply");
+    add_turn(&f.session, "second", "second reply");
+    f.state.session_log = session_log_open("prov-x", "model-a", NULL, NULL, NULL);
+    session_log_append(f.state.session_log, f.session.items, f.session.n_items);
+    struct session_loaded loaded;
+    EXPECT(session_load_all(session_log_path(f.state.session_log), &loaded) == 0);
+    size_t position = loaded.tree[0].after_position;
+    session_loaded_free(&loaded);
+    struct navigation_call call = {
+        .state = &f.state,
+        .position = position,
+        .prompt = agent_user_turn_text(&f.session, 0),
+    };
+    char *out = t_capture_stdout(do_navigation, &call);
+    EXPECT(call.result == 0);
+    EXPECT(agent_user_turn_count(&f.session) == 1);
+    EXPECT_STR_EQ(f.session.items[f.session.n_items - 1].text, "first reply");
+    EXPECT(f.state.pending_preseed == NULL);
+    EXPECT(strstr(out, "switched to after: first") != NULL);
+    free(out);
+    session_log_close(f.state.session_log);
+    fixture_free(&f);
+}
+
+static void test_tree_navigation_failure_leaves_history_unchanged(void)
+{
+    set_state_dir();
+    struct fixture f;
+    fixture_init(&f);
+    add_turn(&f.session, "first", "first reply");
+    struct navigation_call call = {.state = &f.state, .position = 0};
+    char *out = t_capture_stdout(do_navigation, &call);
+    EXPECT(call.result == -1);
+    EXPECT(agent_user_turn_count(&f.session) == 1);
+    EXPECT(strstr(out, "needs session recording") != NULL);
+    free(out);
+    f.state.session_log = session_log_open("prov-x", "model-a", NULL, NULL, NULL);
+    session_log_append(f.state.session_log, f.session.items, f.session.n_items);
+    call.position = 99999;
+    out = t_capture_stdout(do_navigation, &call);
+    EXPECT(call.result == -1);
+    EXPECT(agent_user_turn_count(&f.session) == 1);
+    EXPECT(f.state.pending_preseed == NULL);
+    EXPECT(strstr(out, "conversation left unchanged") != NULL);
+    free(out);
+    session_log_close(f.state.session_log);
+    fixture_free(&f);
+}
+
 int main(void)
 {
     /* Outside any repository, so recorded sessions neither run git nor depend on the checkout. */
     EXPECT(chdir(t_tempdir()) == 0);
+    test_tree_navigation_stages_draft_without_replaying();
+    test_tree_navigation_failure_leaves_history_unchanged();
+    test_tree_continue_after_ancestor_excludes_its_descendants();
     test_apply_settings_empty_reprints_banner();
     test_apply_settings_nonempty_prints_marker();
     test_apply_settings_switch_line_skips_banner();

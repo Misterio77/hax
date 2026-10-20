@@ -84,6 +84,7 @@ Type `/help` for the authoritative live list.
 | `/new [preset]` | Start a fresh conversation, optionally with a preset. `/clear` is an alias. |
 | `/resume` | Pick a past session for this directory. |
 | `/fork [n]` | Create a new session before an earlier prompt; `/fork 0` clones the current tip. |
+| `/tree` | Browse conversation turns; Enter continues, e edits a prompt. |
 | `/undo [n]` | Roll the conversation back to before an earlier prompt. |
 | `/provider [id]` | Switch provider. |
 | `/model [id]` | Switch the current provider's model. |
@@ -106,8 +107,9 @@ pickers continue to the settings that depend on them. With an argument they swit
 provider's model list, fetched in the background; where that isn't available, open the `/model`
 picker once.
 
-Prefer `/fork` when trying an alternative: the original session stays intact. `/undo` has no redo;
-the removed user turns still count toward the session's usage totals.
+Use `/tree` to try alternatives in the same session, or `/fork` to create a separate session.
+`/undo` removes turns from the selected path, but `/tree` can recover their branches. All requests,
+including those on unselected branches, still count toward the session's usage totals.
 
 ## Keyboard shortcuts
 
@@ -214,6 +216,36 @@ hax reports the problem rather than silently choosing another backend.
 
 `--no-session` (or `no_session`) prevents new session and prompt-history writes. It does not hide
 existing sessions or disable prompt recall.
+
+### Conversation trees
+
+Run `/tree` at the prompt to browse conversation turns with their actual parent/child connectors.
+Only the turn containing your current conversation position is marked:
+
+- **Enter** restores context through the selected turn's response, excluding later prompts.
+  Continue with a new message without rerunning that turn.
+- **e** restores context before the selected prompt and puts its original text in the editor.
+  Edit and send it to create another branch without deleting the original continuation.
+- Type to filter. **/** starts explicit search, including queries beginning with `e`.
+  **Alt-E** edits while filtering; **Ctrl-U** clears the search. Escape cancels the picker.
+
+Rows represent turns, not individual tool calls. Intermediate turns are valid continuation points,
+not only branch endpoints. No synthetic branch-tip rows or assistant previews are shown.
+
+The selected position is saved immediately, even if you quit without sending another prompt.
+History left by `/undo` is also available, including in older session files. `/fork` still creates
+an independent file; `/tree` shows only the history in the current file.
+
+Switching prints a short marker and leaves terminal scrollback alone. Old output can therefore
+belong to a branch the model no longer sees: Ctrl-O shows the selected conversation, and Ctrl-T
+shows its model-facing context. Compaction summaries follow their own branch, not its siblings.
+There are no branch summaries or workspace rollbacks: file edits and command side effects are not
+undone. Provider, model, effort, and preset remain at their current settings.
+
+Navigation requires session recording and no running or uncollected background tasks. Collect
+outstanding tasks before switching, or stop them with `/tasks kill` and let the agent collect their
+final reports. Keep branched files away from older hax binaries: those do not understand the saved
+branch cursor and can reconstruct the wrong context.
 
 ## Pausing and steering
 

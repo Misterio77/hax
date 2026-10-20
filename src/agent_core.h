@@ -56,8 +56,8 @@ struct agent_session {
     struct item *items;
     size_t n_items;
     size_t cap_items;
-    /* Items /undo removed from the conversation, in their original order. They are no longer
-     * context, but the requests they record were still served and paid for. */
+    /* Items outside the selected branch, including /undo cuts. They are no longer context,
+     * but the requests they record were still served and paid for. */
     struct item *retired;
     size_t n_retired;
     size_t cap_retired;

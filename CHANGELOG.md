@@ -7,6 +7,15 @@ notes (see [docs/releasing.md](docs/releasing.md)).
 
 ## [Unreleased]
 
+### Added
+
+- `/tree` navigates conversation turns in the same session. Editing an old prompt preserves its
+  descendants, including history left by `/undo`. Branch switches persist immediately, keep the
+  current model selection, and print only a short marker; Ctrl-O shows the selected history. Rows
+  show real ancestry and mark only the current turn. Enter continues after the selected turn;
+  `e` edits its prompt (`Alt-E` while filtering, `/` to search starting with `e`). Navigation
+  requires session recording and no uncollected background tasks.
+
 ### Changed
 
 - Prompts are sent without leading blank lines or trailing whitespace, so a paste or Ctrl+G edit

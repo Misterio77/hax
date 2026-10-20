@@ -61,6 +61,12 @@ void agent_undo(struct agent_state *state, size_t turn_index);
  * unchanged. */
 void agent_fork(struct agent_state *state, size_t turn_index);
 
+/* Select a recorded tree position; edit prefills prompt instead of continuing after its reply.
+ * Running or uncollected background tasks block navigation. Writes the cursor before replacing
+ * history; errors leave the live conversation unchanged. Does not replay history or change the
+ * provider selection. */
+int agent_navigate_tree(struct agent_state *state, size_t position, const char *prompt, int edit);
+
 /* How agent_apply_settings confirms a selection. */
 enum apply_announce {
     APPLY_SILENT,

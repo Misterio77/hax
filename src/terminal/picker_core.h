@@ -25,6 +25,7 @@ struct picker_core {
     size_t first_visible; /* index into `matches` */
     int viewport_rows;
     struct buf query;
+    int explicit_search; /* / permits a query starting with the secondary accept key */
 };
 
 /* Visible cells before the first line break, including an ellipsis when text follows it. */

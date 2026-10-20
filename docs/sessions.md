@@ -4,10 +4,11 @@ hax records conversations as JSONL — one JSON record per line — and exposes 
 two places: session files on disk, and the `hax --json` stream on stdout. This document is the
 format reference for both.
 
-The format is versioned (`"version": 1` in the header) and is a supported read surface for
+The format is versioned (`"version": 2` in new headers) and is a supported read surface for
 scripts and orchestrators. Fields may be added over time, so readers must ignore keys they do not
-recognize; existing fields keep their meaning within a version. Records omit absent values
-rather than writing `null`.
+recognize; existing fields keep their meaning within a version. Version 1 files remain readable.
+A `navigate` record requires version 2 replay semantics even when appended to a version 1 file;
+older binaries must not open such files. Records omit absent values rather than writing `null`.
 
 ## Session files
 
@@ -34,7 +35,7 @@ The first line of a file identifies the session:
 
 | Field | Meaning |
 | --- | --- |
-| `version` | Record-format version, currently `1`. |
+| `version` | Record-format version, currently `2`. |
 | `hax_version` | The hax build that created the session. |
 | `id` | Session UUID, as used by `--resume=ID`. |
 | `timestamp` | Creation time, UTC. |
@@ -56,6 +57,27 @@ items after that many prompts, and the `turn_boundary` before the next one, are 
 the conversation but stay in the file. A reader reconstructing the conversation applies undo
 records in order against the items read so far; the count refers to prompts, not lines, so
 skipped lines do not shift it.
+
+### Navigation (`"type": "navigate"`)
+
+Written by `/tree`: `version` is `2`, and `position` names an earlier item record by its physical,
+one-based JSONL line number. Zero selects an empty conversation. Blank, invalid, and unknown
+lines still occupy line numbers; never renumber or remove them. A torn final line is terminated
+before reopening the file for appends.
+
+Replay keeps an ancestry edge from each item to the selected item before it was appended. An undo
+moves that position to the retained prefix; a navigation selects its recorded position directly.
+Subsequent items extend that position rather than the previous end of the file. The final position
+selects the live root-to-leaf path; other items remain available as branches and for accounting.
+Invalid navigation targets or unsupported versions fail loading rather than mixing branch context.
+
+Each picker row represents a typed prompt and its response. Editing selects the position before
+its preceding turn boundary; continuing selects the end of its response, before any later typed
+prompt. The selected-path response is preferred when a prompt has several resumed responses;
+otherwise the newest recorded response is used. Both operations preserve tool-call/result batches;
+the usual incomplete-tool-call repair still applies when loading interrupted records.
+Selection records and worked-time totals remain session-wide, just as for undo. Navigating does
+not re-execute tools, copy items, generate summaries, or reset the bill.
 
 ### User turn (`"type": "user_turn"`)
 

@@ -19,6 +19,7 @@
 #include "diag.h"
 #include "provider.h"
 #include "session_prune.h"
+#include "session_tree.h"
 #include "version.h"
 #include "xalloc.h"
 #include "system/fs.h"
@@ -826,6 +827,22 @@ int session_log_undo(struct session_log *log, size_t keep_user_turns, size_t new
     return 0;
 }
 
+int session_log_navigate(struct session_log *log, size_t position, size_t new_item_count)
+{
+    if (!log || !log->file || !log->header_written)
+        return -1;
+    json_t *record = json_object();
+    json_object_set_new(record, "type", json_string("navigate"));
+    json_object_set_new(record, "version", json_integer(SESSION_FORMAT_VERSION));
+    json_object_set_new(record, "position", json_integer((json_int_t)position));
+    int result = write_json_line(log->file, record);
+    json_decref(record);
+    if (result < 0 || fflush(log->file) != 0)
+        return -1;
+    log->written_items = new_item_count;
+    return 0;
+}
+
 void session_log_user_turn(struct session_log *log, long elapsed_ms)
 {
     if (!log || !log->file || !log->header_written || elapsed_ms < 0)
@@ -965,15 +982,6 @@ out:
     return result;
 }
 
-static void push_item(struct item **items, size_t *count, size_t *capacity, struct item item)
-{
-    if (*count == *capacity) {
-        *capacity = *capacity ? *capacity * 2 : 16;
-        *items = xrealloc(*items, *capacity * sizeof(**items));
-    }
-    (*items)[(*count)++] = item;
-}
-
 /* Keep earliest images when a file exceeds the current request limits. Only the model-visible
  * window is budgeted: images a compaction summarized away are never sent, so charging the limit
  * for them would degrade the live images that replaced them. */
@@ -1043,6 +1051,13 @@ static FILE *open_session_reader(const char *path)
     return file;
 }
 
+static int session_version_supported(const json_t *object)
+{
+    json_t *version = json_object_get(object, "version");
+    return !version || (json_is_integer(version) && json_integer_value(version) >= 1 &&
+                        json_integer_value(version) <= SESSION_FORMAT_VERSION);
+}
+
 int session_read_meta(const char *path, struct session_meta *out)
 {
     memset(out, 0, sizeof(*out));
@@ -1050,6 +1065,7 @@ int session_read_meta(const char *path, struct session_meta *out)
     if (!file)
         return -1;
 
+    int invalid_version = 0;
     char *line = NULL;
     size_t capacity = 0;
     while (getline(&line, &capacity, file) >= 0) {
@@ -1060,6 +1076,12 @@ int session_read_meta(const char *path, struct session_meta *out)
         if (!object)
             continue;
         const char *type = json_string_value(json_object_get(object, "type"));
+        if (type && (strcmp(type, "session") == 0 || strcmp(type, "navigate") == 0) &&
+            !session_version_supported(object)) {
+            invalid_version = 1;
+            json_decref(object);
+            break;
+        }
         if (type && strcmp(type, "session") == 0) {
             free(out->id);
             out->id = json_dup_string(object, "id");
@@ -1071,7 +1093,7 @@ int session_read_meta(const char *path, struct session_meta *out)
         }
         json_decref(object);
     }
-    int result = ferror(file) ? -1 : 0;
+    int result = ferror(file) || invalid_version ? -1 : 0;
     free(line);
     fclose(file);
     if (result < 0)
@@ -1103,22 +1125,6 @@ static size_t remove_incomplete_tool_calls(struct item *items, size_t count)
     return kept;
 }
 
-/* Undo records name a typed-prompt count rather than an item index: item indices shift when the
- * loader skips a torn line or drops an incomplete tool call, prompt counts do not. */
-static void apply_undo_record(struct session_loaded *loaded, size_t *retired_capacity,
-                              const json_t *object)
-{
-    json_t *value = json_object_get(object, "keep_user_turns");
-    if (!json_is_integer(value) || json_integer_value(value) < 0)
-        return;
-    size_t cut =
-        items_user_turn_cut(loaded->items, loaded->n_items, (size_t)json_integer_value(value));
-    for (size_t i = cut; i < loaded->n_items; i++)
-        push_item(&loaded->retired, &loaded->n_retired, retired_capacity, loaded->items[i]);
-    loaded->n_items = cut;
-    loaded->last_user_turn_ms = -1;
-}
-
 static void apply_user_turn_record(struct session_loaded *loaded, const json_t *object)
 {
     json_t *value = json_object_get(object, "elapsed_ms");
@@ -1128,7 +1134,7 @@ static void apply_user_turn_record(struct session_loaded *loaded, const json_t *
     loaded->worked_ms += loaded->last_user_turn_ms;
 }
 
-int session_load_all(const char *path, struct session_loaded *out)
+static int load_session(const char *path, const size_t *position, struct session_loaded *out)
 {
     memset(out, 0, sizeof(*out));
     out->last_user_turn_ms = -1;
@@ -1137,20 +1143,28 @@ int session_load_all(const char *path, struct session_loaded *out)
     if (!file)
         return -1;
 
-    size_t live_capacity = 0;
-    size_t retired_capacity = 0;
+    struct session_tree tree = {0};
+    size_t record = 0;
+    int invalid_record = 0;
     char *header_provider = NULL;
     char *header_model = NULL;
     char *line = NULL;
     size_t line_capacity = 0;
 
     while (getline(&line, &line_capacity, file) >= 0) {
+        record++;
         json_t *object = json_loads(line, 0, NULL);
         if (!object)
             continue; /* A crash may leave one partial final record. */
 
         const char *type = json_string_value(json_object_get(object, "type"));
         if (type) {
+            if ((strcmp(type, "session") == 0 || strcmp(type, "navigate") == 0) &&
+                !session_version_supported(object)) {
+                invalid_record = 1;
+                json_decref(object);
+                break;
+            }
             if (strcmp(type, "session") == 0) {
                 if (!header_provider)
                     header_provider = json_dup_string(object, "provider");
@@ -1164,7 +1178,20 @@ int session_load_all(const char *path, struct session_loaded *out)
             } else if (strcmp(type, "selection") == 0) {
                 apply_selection_record(&out->meta, object);
             } else if (strcmp(type, "undo") == 0) {
-                apply_undo_record(out, &retired_capacity, object);
+                json_t *value = json_object_get(object, "keep_user_turns");
+                if (json_is_integer(value) && json_integer_value(value) >= 0) {
+                    session_tree_undo(&tree, (size_t)json_integer_value(value));
+                    out->last_user_turn_ms = -1;
+                }
+            } else if (strcmp(type, "navigate") == 0) {
+                json_t *value = json_object_get(object, "position");
+                if (!json_is_integer(value) || json_integer_value(value) < 0 ||
+                    session_tree_navigate(&tree, (size_t)json_integer_value(value)) != 0) {
+                    invalid_record = 1;
+                    json_decref(object);
+                    break;
+                }
+                out->last_user_turn_ms = -1;
             } else if (strcmp(type, "user_turn") == 0) {
                 apply_user_turn_record(out, object);
             }
@@ -1181,7 +1208,7 @@ int session_load_all(const char *path, struct session_loaded *out)
                 if (!item.model && header_model)
                     item.model = xstrdup(header_model);
             }
-            push_item(&out->items, &out->n_items, &live_capacity, item);
+            session_tree_append(&tree, record, item);
         }
         json_decref(object);
     }
@@ -1191,10 +1218,17 @@ int session_load_all(const char *path, struct session_loaded *out)
     fclose(file);
     free(header_provider);
     free(header_model);
-    if (read_failed) {
+    if (read_failed || invalid_record ||
+        (position && session_tree_navigate(&tree, *position) != 0)) {
+        session_tree_free(&tree);
         session_loaded_free(out);
         return -1;
     }
+
+    session_tree_export(&tree, out);
+    session_tree_free(&tree);
+    if (position)
+        out->last_user_turn_ms = -1;
 
     /* Providers reject tool calls that lack a corresponding result after a crash. */
     out->n_items = remove_incomplete_tool_calls(out->items, out->n_items);
@@ -1202,8 +1236,21 @@ int session_load_all(const char *path, struct session_loaded *out)
     return 0;
 }
 
+int session_load_all(const char *path, struct session_loaded *out)
+{
+    return load_session(path, NULL, out);
+}
+
+int session_load_at(const char *path, size_t position, struct session_loaded *out)
+{
+    return load_session(path, &position, out);
+}
+
 void session_loaded_free(struct session_loaded *loaded)
 {
+    for (size_t i = 0; i < loaded->n_tree; i++)
+        free(loaded->tree[i].prompt);
+    free(loaded->tree);
     for (size_t i = 0; i < loaded->n_items; i++)
         item_free(&loaded->items[i]);
     free(loaded->items);

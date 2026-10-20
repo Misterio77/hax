@@ -12,6 +12,7 @@
 #include "slash.h"
 #include "tool.h"
 #include "xalloc.h"
+#include "commands/tree.h"
 #include "render/render_ctx.h"
 #include "terminal/input_core.h"
 #include "text/completion.h"
@@ -78,6 +79,10 @@ void agent_fork(struct agent_state *state, size_t turn_index)
 {
     (void)state;
     (void)turn_index;
+}
+void tree_command(struct agent_state *state)
+{
+    (void)state;
 }
 struct picker_opts;
 long picker_run(const struct picker_opts *opts)

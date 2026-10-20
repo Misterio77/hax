@@ -9,11 +9,11 @@
 
 /* Append-only conversation persistence. Each session is a JSONL file under the current
  * directory's bucket in the XDG state tree. The first line is a header; subsequent lines are
- * items or control records: complete provider/model/effort/preset selections, /undo cuts, and
- * completed user-turn timings. Nothing is ever rewritten, so a reader following the file sees
- * every record once and applies undo records itself. */
+ * items or control records: selections, undo cuts, tree navigation, and completed user-turn
+ * timings. Nothing is rewritten. Readers replay ancestry and the selected position to obtain
+ * the live conversation; unselected items remain available for navigation and accounting. */
 
-#define SESSION_FORMAT_VERSION 1
+#define SESSION_FORMAT_VERSION 2
 
 /* Returns a new JSON reference. NULL item fields are omitted. */
 json_t *item_to_json(const struct item *item);
@@ -132,13 +132,27 @@ int session_path_is_standard(const char *path);
  * Returns 0 on success, -1 on failure. */
 int session_touch(const char *path);
 
+/* One typed prompt and its response. parent indexes this array; SIZE_MAX denotes a root row.
+ * position selects context before the prompt; after_position selects its response, excluding
+ * subsequent typed prompts. Both are physical item-record ids, with zero denoting the root.
+ * prompt is owned. current marks only the turn containing the selected conversation position. */
+struct session_tree_entry {
+    size_t parent;
+    size_t position;
+    size_t after_position;
+    char *prompt;
+    int current;
+};
+
 /* Everything a session file says about its conversation. Items and retired items are owned
  * arrays; free each item with item_free before freeing the array, or use session_loaded_free. */
 struct session_loaded {
-    struct item *items; /* the live conversation after applying every undo record */
+    struct item *items; /* the selected root-to-leaf conversation */
     size_t n_items;
-    struct item *retired; /* items undo records removed, in file order */
+    struct item *retired; /* items outside the selected path, in file order */
     size_t n_retired;
+    struct session_tree_entry *tree;
+    size_t n_tree;
     long worked_ms;         /* sum of recorded user-turn durations */
     long last_user_turn_ms; /* newest duration recorded since the last undo; -1 when none */
     struct session_meta meta;
@@ -148,6 +162,14 @@ struct session_loaded {
  * live conversation, and old reasoning items inherit header provenance. `out` is zeroed on
  * failure. */
 int session_load_all(const char *path, struct session_loaded *out);
+
+/* Load a different position without writing it. Invalid positions fail with no owned output.
+ * Provider/model selection and usage totals remain session-wide, as for /undo. */
+int session_load_at(const char *path, size_t position, struct session_loaded *out);
+
+/* Persist a navigation and update the writer's live-item high water mark. Requires an open log;
+ * call only after session_load_at validates the position and prepares the replacement history. */
+int session_log_navigate(struct session_log *log, size_t position, size_t new_item_count);
 
 /* Releases every field still owned by `loaded`; callers that transferred an array set it NULL. */
 void session_loaded_free(struct session_loaded *loaded);

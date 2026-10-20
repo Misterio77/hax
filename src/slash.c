@@ -20,6 +20,7 @@
 #include "commands/login.h"
 #include "commands/session_cmd.h"
 #include "commands/tasks.h"
+#include "commands/tree.h"
 #include "render/disp.h"
 #include "render/render_ctx.h"
 #include "terminal/ansi.h"
@@ -78,6 +79,7 @@ static void run_new(const struct command_call *call);
 static void run_resume(const struct command_call *call);
 static void run_undo(const struct command_call *call);
 static void run_fork(const struct command_call *call);
+static void run_tree(const struct command_call *call);
 static void run_provider(const struct command_call *call);
 static void run_model(const struct command_call *call);
 static void run_effort(const struct command_call *call);
@@ -129,6 +131,12 @@ static const struct slash_command COMMANDS[] = {
         .summary = "resume a past conversation",
         .display = COMMAND_DISPLAY_MANAGED,
         .handler = run_resume,
+    },
+    {
+        .name = "tree",
+        .summary = "navigate conversation branches without discarding history",
+        .display = COMMAND_DISPLAY_MANAGED,
+        .handler = run_tree,
     },
     {
         .name = "undo",
@@ -684,6 +692,16 @@ static void run_history_action(const struct command_call *call, enum history_act
 static void run_undo(const struct command_call *call)
 {
     run_history_action(call, HISTORY_UNDO);
+}
+
+static void run_tree(const struct command_call *call)
+{
+    if (call->argument) {
+        ui_error("/tree takes no arguments");
+        disp_sync_external_line(&call->state->render->disp);
+        return;
+    }
+    tree_command(call->state);
 }
 
 static void run_fork(const struct command_call *call)
