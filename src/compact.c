@@ -151,12 +151,15 @@ struct compact_sink {
     char *error_message;
 };
 
+/* A summarization request borrows the conversation it summarizes, except for tool output, which it
+ * may replace with a truncated copy of its own. */
 struct summary_request {
     struct context base_context;
     struct item *items;
+    unsigned char *owned_items; /* the request owns every field of this item */
+    char **owned_outputs;       /* replacement for items[i].output, owned when non-NULL */
     size_t count;
     size_t capacity;
-    size_t borrowed_count;
 };
 
 static int compact_sink_on_event(const struct stream_event *event, void *user)
@@ -185,14 +188,50 @@ static int compact_sink_on_event(const struct stream_event *event, void *user)
     return 0;
 }
 
+static void summary_request_reserve(struct summary_request *request, size_t wanted)
+{
+    if (wanted <= request->capacity)
+        return;
+    size_t previous = request->capacity;
+    request->capacity = wanted;
+    request->items = xrealloc(request->items, request->capacity * sizeof(*request->items));
+    request->owned_items = xrealloc(request->owned_items, request->capacity);
+    request->owned_outputs =
+        xrealloc(request->owned_outputs, request->capacity * sizeof(*request->owned_outputs));
+    for (size_t i = previous; i < request->capacity; i++) {
+        request->owned_items[i] = 0;
+        request->owned_outputs[i] = NULL;
+    }
+}
+
 /* Ownership of `item` transfers to `request`. */
 static void summary_request_append(struct summary_request *request, struct item item)
 {
-    if (request->count == request->capacity) {
-        request->capacity = request->capacity ? request->capacity * 2 : 16;
-        request->items = xrealloc(request->items, request->capacity * sizeof(*request->items));
-    }
-    request->items[request->count++] = item;
+    summary_request_reserve(request, request->count + 1);
+    request->items[request->count] = item;
+    request->owned_items[request->count] = 1;
+    request->count++;
+}
+
+/* Tool output is what makes a window large, and a summary rarely needs all of it. The request sees
+ * the head of each result, marked so a cut is not read as the whole output. */
+#define SUMMARY_TOOL_RESULT_CHARS 2000
+
+static void truncate_tool_result(struct item *item, char **owned_output)
+{
+    if (item->kind != ITEM_TOOL_RESULT || !item->output)
+        return;
+    size_t length = strlen(item->output);
+    if (length <= SUMMARY_TOOL_RESULT_CHARS)
+        return;
+    /* Never split a UTF-8 sequence: continuation bytes start with 10. */
+    size_t kept = SUMMARY_TOOL_RESULT_CHARS;
+    while (kept > 0 && ((unsigned char)item->output[kept] & 0xc0) == 0x80)
+        kept--;
+    *owned_output = xasprintf("%.*s\n[%zu of %zu characters truncated]", (int)kept, item->output,
+                              length - kept, length);
+    item->output = *owned_output;
+    item->output_hidden_tail = 0;
 }
 
 /* The request borrows the window it summarizes and appends its instructions as the final user
@@ -209,19 +248,25 @@ static void summary_request_init(struct summary_request *request,
     request->base_context.image_input =
         model_meta_image_input(params->provider, params->session->model);
     request->base_context.session_id = session_log_id(params->session_log);
-    request->borrowed_count = n_items;
-    request->capacity = n_items + 1;
-    request->items = xmalloc(request->capacity * sizeof(*request->items));
-    if (n_items > 0)
-        memcpy(request->items, items, n_items * sizeof(*request->items));
+    summary_request_reserve(request, n_items + 1);
+    for (size_t i = 0; i < n_items; i++) {
+        request->items[i] = items[i];
+        truncate_tool_result(&request->items[i], &request->owned_outputs[i]);
+    }
     request->count = n_items;
     summary_request_append(request, (struct item){.kind = ITEM_USER_MESSAGE, .text = prompt});
 }
 
 static void summary_request_destroy(struct summary_request *request)
 {
-    for (size_t i = request->borrowed_count; i < request->count; i++)
-        item_free(&request->items[i]);
+    for (size_t i = 0; i < request->count; i++) {
+        if (request->owned_items[i])
+            item_free(&request->items[i]);
+        else
+            free(request->owned_outputs[i]);
+    }
+    free(request->owned_outputs);
+    free(request->owned_items);
     free(request->items);
 }
 

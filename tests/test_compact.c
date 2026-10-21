@@ -71,7 +71,9 @@ struct mock_state {
     int cancel_requested;
     int observed_events;
     size_t last_request_items;
-    char last_prompt[2048]; /* newest user message the request carried */
+    char last_prompt[2048];    /* newest user message the request carried */
+    size_t last_output_bytes;  /* largest tool result the request carried */
+    int last_output_truncated; /* a result carried the truncation marker */
 };
 
 static struct mock_state mock;
@@ -141,6 +143,17 @@ static int mock_stream(struct provider *provider, const struct context *ctx, con
     (void)tick_user;
     EXPECT(ctx != NULL);
     mock.last_request_items = ctx->n_items;
+    mock.last_output_bytes = 0;
+    mock.last_output_truncated = 0;
+    for (size_t i = 0; i < ctx->n_items; i++) {
+        if (ctx->items[i].kind != ITEM_TOOL_RESULT || !ctx->items[i].output)
+            continue;
+        size_t bytes = strlen(ctx->items[i].output);
+        if (bytes > mock.last_output_bytes)
+            mock.last_output_bytes = bytes;
+        if (strstr(ctx->items[i].output, "characters truncated"))
+            mock.last_output_truncated = 1;
+    }
     mock.last_prompt[0] = '\0';
     for (size_t i = ctx->n_items; i-- > 0;) {
         if (ctx->items[i].kind != ITEM_USER_MESSAGE || !ctx->items[i].text)
@@ -631,6 +644,39 @@ static void test_kept_tail_survives_reload(void)
     agent_session_free(&resumed);
 }
 
+/* Summarizing pays for every byte it sends, and a tool result is usually most of a window. The
+ * request sees its head only; the conversation keeps all of it. */
+static void test_summary_request_truncates_tool_output(void)
+{
+    struct agent_session session;
+    memset(&session, 0, sizeof(session));
+    session.model = xstrdup("model");
+    session.provider_id = "test";
+    char *long_output = xmalloc(5001);
+    memset(long_output, 'x', 5000);
+    long_output[5000] = '\0';
+    agent_session_append(&session, (struct item){.kind = ITEM_TOOL_CALL,
+                                                 .call_id = xstrdup("c1"),
+                                                 .tool_name = xstrdup("read"),
+                                                 .tool_arguments_json = xstrdup("{}")});
+    agent_session_append(
+        &session,
+        (struct item){.kind = ITEM_TOOL_RESULT, .call_id = xstrdup("c1"), .output = long_output});
+    struct provider provider = {.name = "test", .stream = mock_stream};
+    reset_mock(MOCK_SUCCESS);
+
+    struct compact_result result = run_compaction(&session, &provider, NULL);
+    EXPECT(result.outcome == COMPACT_COMPLETE);
+    EXPECT(mock.last_output_truncated);
+    EXPECT(mock.last_output_bytes > 2000 && mock.last_output_bytes < 2100);
+    /* The live conversation still holds every byte the tool produced. */
+    EXPECT(session.items[1].kind == ITEM_TOOL_RESULT);
+    EXPECT(strlen(session.items[1].output) == 5000);
+
+    compact_result_destroy(&result);
+    agent_session_free(&session);
+}
+
 /* A branch summary is a report about work that is not the current conversation, so it must not
  * append a seed or otherwise reshape the window it was asked from. */
 static void test_branch_summary_leaves_history_alone(void)
@@ -808,6 +854,7 @@ int main(void)
     test_keeps_one_session();
     test_tool_call_retries_are_bounded();
     test_resumed_session_floors_at_seed();
+    test_summary_request_truncates_tool_output();
     test_branch_summary_leaves_history_alone();
     test_branch_summary_cancel_still_bills();
     test_branch_summary_requires_a_model();
