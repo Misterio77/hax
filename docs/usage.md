@@ -247,7 +247,9 @@ shows its model-facing context. Compaction summaries follow their own branch, no
 Nothing is rolled back: file edits and command side effects are not undone, and neither provider,
 model, effort, nor preset changes. A branch summary written by **s** is appended where you land and
 says so — it reports what that branch explored, learned, and left running, and warns that none of it
-is the current state.
+is the current state. It also ends with the files the branch read and changed, taken from its tool
+calls rather than from the model's recollection, and keeps lists carried by any earlier branch
+summary it summarizes.
 
 Navigation requires session recording and no running or uncollected background tasks. Collect
 outstanding tasks before switching, or stop them with `/tasks kill` and let the agent collect their

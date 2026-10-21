@@ -644,6 +644,111 @@ static void test_kept_tail_survives_reload(void)
     agent_session_free(&resumed);
 }
 
+/* The file sections are data, not a model's recollection: paths come from the branch's own tool
+ * calls, and a summary carried in from an earlier switch keeps its lists. */
+static void test_branch_summary_records_touched_files(void)
+{
+    struct agent_session session;
+    init_session(&session);
+    struct provider provider = {.name = "test", .stream = mock_stream};
+    struct item departing[] = {
+        {.kind = ITEM_USER_MESSAGE, .text = xstrdup("explore the parser")},
+        {.kind = ITEM_TOOL_CALL,
+         .call_id = xstrdup("c1"),
+         .tool_name = xstrdup("read"),
+         .tool_arguments_json = xstrdup("{\"path\":\"src/parse.c\"}")},
+        {.kind = ITEM_TOOL_RESULT, .call_id = xstrdup("c1"), .output = xstrdup("clean")},
+        {.kind = ITEM_TOOL_CALL,
+         .call_id = xstrdup("c2"),
+         .tool_name = xstrdup("edit"),
+         .tool_arguments_json = xstrdup("{\"path\":\"src/parse.c\"}")},
+        {.kind = ITEM_TOOL_RESULT, .call_id = xstrdup("c2"), .output = xstrdup("ok")},
+        {.kind = ITEM_TOOL_CALL,
+         .call_id = xstrdup("c3"),
+         .tool_name = xstrdup("read"),
+         .tool_arguments_json = xstrdup("{\"path\":\"src/parse.c\"}")},
+        {.kind = ITEM_TOOL_RESULT, .call_id = xstrdup("c3"), .output = xstrdup("clean")},
+        {.kind = ITEM_TOOL_CALL,
+         .call_id = xstrdup("c4"),
+         .tool_name = xstrdup("bash"),
+         .tool_arguments_json = xstrdup("{\"command\":\"make\"}")},
+        {.kind = ITEM_TOOL_RESULT, .call_id = xstrdup("c4"), .output = xstrdup("built")},
+    };
+    size_t count = sizeof(departing) / sizeof(departing[0]);
+    reset_mock(MOCK_SUCCESS);
+
+    char *summary = compact_summarize_branch(
+        &(struct compact_params){.session = &session, .provider = &provider}, departing, count,
+        NULL);
+    EXPECT(summary != NULL);
+    if (summary) {
+        /* Each path appears once, under the section its tool belongs to. */
+        EXPECT(strstr(summary, "## Goal") != NULL); /* the summary itself comes first */
+        EXPECT(strstr(summary, "<read-files>\nsrc/parse.c\n</read-files>") != NULL);
+        EXPECT(strstr(summary, "<modified-files>\nsrc/parse.c\n</modified-files>") != NULL);
+        EXPECT(strstr(summary, "make") == NULL); /* bash has no attributable path */
+    }
+    free(summary);
+    for (size_t i = 0; i < count; i++)
+        item_free(&departing[i]);
+    agent_session_free(&session);
+}
+
+/* A branch left earlier already recorded its files; switching away from it again must not lose
+ * them. */
+static void test_branch_summary_carries_earlier_file_lists(void)
+{
+    struct agent_session session;
+    init_session(&session);
+    struct provider provider = {.name = "test", .stream = mock_stream};
+    struct item departing[] = {
+        {.kind = ITEM_USER_MESSAGE,
+         .origin = ITEM_ORIGIN_BRANCH_SUMMARY,
+         .text = xstrdup("earlier branch\n\n<read-files>\nREADME.md\n</read-files>\n\n"
+                         "<modified-files>\ndocs/usage.md\n</modified-files>")},
+        {.kind = ITEM_TOOL_CALL,
+         .call_id = xstrdup("c1"),
+         .tool_name = xstrdup("write"),
+         .tool_arguments_json = xstrdup("{\"path\":\"src/new.c\"}")},
+        {.kind = ITEM_TOOL_RESULT, .call_id = xstrdup("c1"), .output = xstrdup("ok")},
+    };
+    size_t count = sizeof(departing) / sizeof(departing[0]);
+    reset_mock(MOCK_SUCCESS);
+
+    char *summary = compact_summarize_branch(
+        &(struct compact_params){.session = &session, .provider = &provider}, departing, count,
+        NULL);
+    EXPECT(summary != NULL);
+    if (summary) {
+        EXPECT(strstr(summary, "<read-files>\nREADME.md\n</read-files>") != NULL);
+        EXPECT(strstr(summary, "<modified-files>\ndocs/usage.md\nsrc/new.c\n</modified-files>") !=
+               NULL);
+    }
+    free(summary);
+    for (size_t i = 0; i < count; i++)
+        item_free(&departing[i]);
+    agent_session_free(&session);
+}
+
+/* A branch with no tool calls has nothing to list. */
+static void test_branch_summary_without_files_adds_no_sections(void)
+{
+    struct agent_session session;
+    init_session(&session);
+    struct provider provider = {.name = "test", .stream = mock_stream};
+    struct item departing[] = {{.kind = ITEM_USER_MESSAGE, .text = xstrdup("just talking")}};
+    reset_mock(MOCK_SUCCESS);
+
+    char *summary = compact_summarize_branch(
+        &(struct compact_params){.session = &session, .provider = &provider}, departing, 1, NULL);
+    EXPECT(summary != NULL);
+    if (summary)
+        EXPECT(strstr(summary, "<read-files>") == NULL);
+    free(summary);
+    item_free(&departing[0]);
+    agent_session_free(&session);
+}
+
 /* Summarizing pays for every byte it sends, and a tool result is usually most of a window. The
  * request sees its head only; the conversation keeps all of it. */
 static void test_summary_request_truncates_tool_output(void)
@@ -854,6 +959,9 @@ int main(void)
     test_keeps_one_session();
     test_tool_call_retries_are_bounded();
     test_resumed_session_floors_at_seed();
+    test_branch_summary_records_touched_files();
+    test_branch_summary_carries_earlier_file_lists();
+    test_branch_summary_without_files_adds_no_sections();
     test_summary_request_truncates_tool_output();
     test_branch_summary_leaves_history_alone();
     test_branch_summary_cancel_still_bills();

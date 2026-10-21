@@ -1,11 +1,13 @@
 /* SPDX-License-Identifier: MIT */
 #include "compact.h"
 
+#include <jansson.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "agent_core.h"
 #include "agent_usage.h"
+#include "buf.h"
 #include "config.h"
 #include "model_meta.h"
 #include "provider.h"
@@ -519,6 +521,130 @@ void compact_run(const struct compact_params *params, struct compact_result *res
     result->outcome = COMPACT_COMPLETE;
 }
 
+/* Files a branch touched, taken from its tool calls rather than from the summary text: a model can
+ * forget a path it edited, and a reader deciding whether to trust the branch needs the exact set.
+ * Sections carried by an earlier branch summary are merged in, so chained switches keep the
+ * record. The lists are appended to the summary, not asked for in it. */
+static void file_list_add(char ***paths, const char *path)
+{
+    size_t count = 0;
+    while (*paths && (*paths)[count])
+        count++;
+    for (size_t i = 0; i < count; i++)
+        if (strcmp((*paths)[i], path) == 0)
+            return;
+    *paths = xrealloc(*paths, (count + 2) * sizeof(**paths));
+    (*paths)[count] = xstrdup(path);
+    (*paths)[count + 1] = NULL;
+}
+
+static void collect_section(const char *text, const char *open, const char *close, char ***paths)
+{
+    const char *start = strstr(text, open);
+    if (!start)
+        return;
+    start += strlen(open);
+    const char *end = strstr(start, close);
+    for (; end && start < end;) {
+        const char *newline = memchr(start, '\n', (size_t)(end - start));
+        const char *line_end = newline ? newline : end;
+        size_t length = (size_t)(line_end - start);
+        while (length > 0 && (start[length - 1] == ' ' || start[length - 1] == '\r'))
+            length--;
+        if (length > 0) {
+            char *path = xmalloc(length + 1);
+            memcpy(path, start, length);
+            path[length] = '\0';
+            file_list_add(paths, path);
+            free(path);
+        }
+        start = newline ? newline + 1 : end;
+    }
+}
+
+static void collect_tool_call_files(const struct item *call, char ***read_files,
+                                    char ***modified_files)
+{
+    if (!call->tool_name || !call->tool_arguments_json)
+        return;
+    char ***paths;
+    if (strcmp(call->tool_name, "read") == 0)
+        paths = read_files;
+    else if (strcmp(call->tool_name, "write") == 0 || strcmp(call->tool_name, "edit") == 0)
+        paths = modified_files;
+    else
+        return;
+
+    json_t *arguments = json_loads(call->tool_arguments_json, 0, NULL);
+    if (!arguments)
+        return;
+    const char *path = json_string_value(json_object_get(arguments, "path"));
+    if (path && *path)
+        file_list_add(paths, path);
+    json_decref(arguments);
+}
+
+static void collect_branch_files(const struct item *items, size_t n_items, char ***read_files,
+                                 char ***modified_files)
+{
+    for (size_t i = 0; i < n_items; i++) {
+        const struct item *item = &items[i];
+        if (item->kind == ITEM_TOOL_CALL) {
+            collect_tool_call_files(item, read_files, modified_files);
+        } else if (item->kind == ITEM_USER_MESSAGE && item->origin == ITEM_ORIGIN_BRANCH_SUMMARY &&
+                   item->text) {
+            collect_section(item->text, "<read-files>\n", "</read-files>", read_files);
+            collect_section(item->text, "<modified-files>\n", "</modified-files>", modified_files);
+        }
+    }
+}
+
+static int file_list_empty(char *const *paths)
+{
+    return !paths || !paths[0];
+}
+
+static void append_file_section(struct buf *out, const char *tag, char *const *paths)
+{
+    if (file_list_empty(paths))
+        return;
+    buf_append_str(out, "\n\n<");
+    buf_append_str(out, tag);
+    buf_append_str(out, ">\n");
+    for (size_t i = 0; paths[i]; i++) {
+        buf_append_str(out, paths[i]);
+        buf_append_str(out, "\n");
+    }
+    buf_append_str(out, "</");
+    buf_append_str(out, tag);
+    buf_append_str(out, ">");
+}
+
+/* Takes ownership of `summary`. */
+static char *with_branch_files(char *summary, const struct item *items, size_t n_items)
+{
+    char **read_files = NULL;
+    char **modified_files = NULL;
+    collect_branch_files(items, n_items, &read_files, &modified_files);
+    if (file_list_empty(read_files) && file_list_empty(modified_files)) {
+        string_array_free(read_files);
+        string_array_free(modified_files);
+        return summary;
+    }
+
+    struct buf out;
+    buf_init(&out);
+    buf_append_str(&out, summary);
+    append_file_section(&out, "read-files", read_files);
+    append_file_section(&out, "modified-files", modified_files);
+    free(summary);
+    string_array_free(read_files);
+    string_array_free(modified_files);
+    char *result = buf_steal(&out);
+    buf_free(&out);
+    return result;
+}
+
 /* Everything the request learns is billed to the branch being left, in this conversation: its
  * footers land before the navigation that abandons them. */
 char *compact_summarize_branch(const struct compact_params *params, const struct item *items,
@@ -551,7 +677,7 @@ char *compact_summarize_branch(const struct compact_params *params, const struct
         free(summary);
         return NULL;
     }
-    return summary;
+    return with_branch_files(summary, items, n_items);
 }
 
 char *compact_branch_seed(const char *summary)
