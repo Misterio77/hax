@@ -986,6 +986,60 @@ static void test_load_departing_collects_the_abandoned_tail(void)
     free(path);
 }
 
+/* Reading the branch being left after a compaction follows the same spliced order the live
+ * conversation uses, so the summary includes the seed and the turns it kept. */
+static void test_load_departing_across_a_kept_seed(void)
+{
+    use_fresh_session_state();
+    struct item conversation[] = {
+        {.kind = ITEM_TURN_BOUNDARY},
+        {.kind = ITEM_USER_MESSAGE, .text = (char *)"first"},
+        {.kind = ITEM_ASSISTANT_MESSAGE, .text = (char *)"r1"},
+        {.kind = ITEM_TURN_BOUNDARY},
+        {.kind = ITEM_USER_MESSAGE, .text = (char *)"second"},
+        {.kind = ITEM_ASSISTANT_MESSAGE, .text = (char *)"r2"},
+        {.kind = ITEM_USER_MESSAGE,
+         .text = (char *)"summary",
+         .origin = ITEM_ORIGIN_COMPACT_SEED,
+         .keep_count = 3},
+    };
+    size_t count = sizeof(conversation) / sizeof(conversation[0]);
+    char *path = write_session("pa", "ma", NULL, NULL, conversation, count);
+
+    struct session_loaded loaded;
+    EXPECT(session_load_all(path, &loaded) == 0);
+    EXPECT(loaded.n_items == 7);
+    EXPECT(loaded.items[3].origin == ITEM_ORIGIN_COMPACT_SEED);
+    size_t newest_kept = loaded.tree[0].after_position;
+    session_loaded_free(&loaded);
+
+    /* Leaving for the root abandons everything, in the order the conversation is read: the seed
+     * sits between the turn it summarized and the turn it kept. */
+    struct item *items = NULL;
+    size_t n = 0;
+    EXPECT(session_load_departing(path, 0, &items, &n) == 0);
+    EXPECT(n == 7);
+    if (n == 7) {
+        EXPECT_STR_EQ(items[1].text, "first");
+        EXPECT(items[3].origin == ITEM_ORIGIN_COMPACT_SEED);
+        EXPECT_STR_EQ(items[5].text, "second");
+    }
+    free_items(items, n);
+
+    /* Continuing after that first turn lands on the seed, so only the kept turn departs. */
+    items = NULL;
+    n = 0;
+    EXPECT(session_load_departing(path, newest_kept, &items, &n) == 0);
+    EXPECT(n == 3);
+    if (n == 3) {
+        EXPECT(items[0].kind == ITEM_TURN_BOUNDARY);
+        EXPECT_STR_EQ(items[1].text, "second");
+        EXPECT_STR_EQ(items[2].text, "r2");
+    }
+    free_items(items, n);
+    free(path);
+}
+
 /* A kept count says where a seed sits in its own file. A fork writes the live conversation, which
  * is already summary-first, so carrying the count over would move the summarized prefix's tail
  * behind the seed instead. */
@@ -1422,6 +1476,7 @@ int main(void)
     test_fork_writes_prefix_as_inherited_without_touching_source();
     test_fork_drops_kept_seed_count();
     test_load_departing_collects_the_abandoned_tail();
+    test_load_departing_across_a_kept_seed();
     test_selection_metadata_tracks_productive_switches();
     test_discarded_selection_stays_out_of_log();
     test_undo_keeps_effective_selection();

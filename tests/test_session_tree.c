@@ -178,6 +178,28 @@ static void test_departing_count_follows_the_shared_prefix(void)
     session_tree_free(&tree);
 }
 
+/* Departing follows parent links, and a kept tail hangs off a later record than the items before
+ * it: the seed and the turns it keeps all belong to the branch being left. */
+static void test_departing_across_a_spliced_seed(void)
+{
+    struct session_tree tree = {0};
+    add_exchange(&tree, 2, "first");
+    add_exchange(&tree, 5, "second");
+    session_tree_append(&tree, 8,
+                        (struct item){.kind = ITEM_USER_MESSAGE,
+                                      .text = xstrdup("summary"),
+                                      .origin = ITEM_ORIGIN_COMPACT_SEED,
+                                      .keep_count = 3});
+    add_exchange(&tree, 9, "third");
+    /* Going back to the first reply abandons the seed, the kept turn, and the turn after it. */
+    EXPECT(session_tree_departing_count(&tree, 4) == 7);
+    /* Going back to just after the kept turn abandons only what came later. */
+    EXPECT(session_tree_departing_count(&tree, 7) == 3);
+    /* The kept turn itself is still on the selected path. */
+    EXPECT(session_tree_departing_count(&tree, 11) == 0);
+    session_tree_free(&tree);
+}
+
 /* A tail longer than the conversation keeps everything and makes the seed the root. */
 static void test_seed_keep_past_root(void)
 {
@@ -241,6 +263,7 @@ int main(void)
     test_seed_splices_ahead_of_kept_tail();
     test_seed_keep_past_root();
     test_departing_count_follows_the_shared_prefix();
+    test_departing_across_a_spliced_seed();
     test_repeated_navigation_does_not_duplicate_items();
     test_empty_tree();
     T_REPORT();
