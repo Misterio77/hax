@@ -253,6 +253,7 @@ provider-dependent.
 | `notify` | `HAX_NOTIFY` | `auto` | Completion notification: `auto`, `bel`, `osc9`, or `off`. |
 | `theme` | `HAX_THEME` | `auto` | `auto`, `dark`, `light`, `ansi`, or `off`. |
 | `tint` | `HAX_TINT` | `teal` | Model-output tint: `teal`, `violet`, `rose`, or `sage`. |
+| `prompt` | `HAX_PROMPT` | `❯` | Glyph before the input line; empty keeps the built-in one (`>` without a UTF-8 locale). |
 | `keep_awake` | `HAX_KEEP_AWAKE` | on | Best-effort idle-sleep inhibition while a turn runs. |
 | `compact.auto` | `HAX_COMPACT_AUTO` | on | Automatically summarize the conversation near the context limit. |
 | `compact.threshold` | `HAX_COMPACT_THRESHOLD` | `85` | Context percentage that triggers automatic compaction. |

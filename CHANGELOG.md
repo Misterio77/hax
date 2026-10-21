@@ -14,6 +14,10 @@ notes (see [docs/releasing.md](docs/releasing.md)).
   `providers.<id>.api_key_command` runs a helper such as `pass show`. Both take the first
   non-blank line, and a configured source that fails falls back to the next one after a warning.
   See [docs/providers.md](docs/providers.md#custom-providers).
+- The glyph before the input line is configurable with `prompt` / `HAX_PROMPT` or
+  `/config prompt`; an unset or empty value keeps the built-in `❯`, which falls back to `>` in
+  a non-UTF-8 locale. Control characters and bidi overrides are flattened, so a glyph cannot
+  disturb the input editor's layout.
 - `/tree` navigates conversation turns in the same session. Editing an old prompt preserves its
   descendants, including history left by `/undo`. Branch switches persist immediately, keep the
   current model selection, and print only a short marker; Ctrl-O shows the selected history. Rows

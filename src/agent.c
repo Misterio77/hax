@@ -51,15 +51,21 @@
 #include "tools/bash_process.h"
 #include "tools/task_registry.h"
 
-/* Use ASCII unless wcwidth() can measure the themed UTF-8 glyph correctly. */
-static const char *build_prompt(char *buffer, size_t size)
+/* A configured glyph needs no escaping logic, but it must not smuggle in newlines, control
+ * sequences, or direction changes that break the input editor's row accounting. Empty falls back
+ * to the built-in glyph, which is ASCII unless wcwidth() can measure UTF-8 correctly. */
+static char *build_prompt(void)
 {
-    if (locale_have_utf8())
-        snprintf(buffer, size, "%s" ANSI_BOLD "❯" ANSI_BOLD_OFF "%s ", theme_open(THEME_ACCENT),
-                 theme_close(THEME_ACCENT));
-    else
-        snprintf(buffer, size, ANSI_BOLD ">" ANSI_BOLD_OFF " ");
-    return buffer;
+    const char *configured = config_str_nonempty("prompt");
+    char *glyph = configured ? flatten_for_display(configured) : NULL;
+    if (!glyph || !*glyph) {
+        free(glyph);
+        glyph = xstrdup(locale_have_utf8() ? "❯" : ">");
+    }
+    char *prompt = xasprintf("%s" ANSI_BOLD "%s" ANSI_BOLD_OFF "%s ", theme_open(THEME_ACCENT),
+                             glyph, theme_close(THEME_ACCENT));
+    free(glyph);
+    return prompt;
 }
 
 /* Tables buffer invisibly until layout completes; delay the spinner to avoid flicker on fast
@@ -1309,19 +1315,18 @@ int agent_run(struct provider **provider_io, const struct hax_opts *options)
     interrupt_init();
     interrupt_set_fatal_signal_hook(bash_shell_pgids_kill);
 
-    char prompt_buffer[64];
-
     for (;;) {
         disp_block_separator(&render.disp);
         /* Only a resumable turn gives an empty send a meaning; otherwise
          * the editor keeps swallowing bare Enter. */
         input_set_empty_submit(input, resume_placeholder(state.resume_reason));
         cursor_show();
-        /* Rebuilt each iteration so a runtime theme change (/config theme …)
-         * recolors the prompt instead of keeping the startup theme's bytes. */
+        /* Rebuilt each iteration so a runtime theme or prompt change in /config recolors or
+         * replaces the prompt instead of keeping the startup bytes. */
+        char *prompt = build_prompt();
         char *line;
-        enum input_result result =
-            input_readline(input, build_prompt(prompt_buffer, sizeof(prompt_buffer)), &line);
+        enum input_result result = input_readline(input, prompt, &line);
+        free(prompt);
         cursor_hide();
         if (result == INPUT_ESCAPE) {
             tree_command(&state);

@@ -100,4 +100,21 @@ def test_editor_round_trip():
     )
 
 
+def test_prompt_glyph_configured():
+    term = harness.Terminal("end-turn", extra_env={"HAX_PROMPT": "λ"})
+    term.wait_for("λ")
+    term.type("hi")
+    term.expect_screen(
+        """
+        ▌ hax › mock · mock-model
+        ▌ ctrl-d quit · try /help
+
+        λ hi
+        """
+    )
+    term.send("C-u")
+    term.send("C-d")
+    harness.expect(term.wait_exit() == 0, "Ctrl-D on an empty prompt exits 0")
+
+
 harness.main(globals())

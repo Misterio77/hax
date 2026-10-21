@@ -78,6 +78,10 @@ static const struct config_setting REGISTRY[] = {
      .description = "Identity tint for model output; an active preset's own tint wins until set "
                     "here. Ignored by the ansi and off themes",
      .choices = "teal|violet|rose|sage", .editable = 1},
+    {.key = "prompt", .env_var = "HAX_PROMPT",
+     .description = "Glyph before the input line; empty uses the built-in one (❯, or > without "
+                    "a UTF-8 locale)",
+     .editable = 1},
 
     /* behavior */
     {.key = "keep_awake", .env_var = "HAX_KEEP_AWAKE", .default_value = "1",
