@@ -21,7 +21,8 @@ notes (see [docs/releasing.md](docs/releasing.md)).
   `e` edits its prompt (`Alt-E` while filtering, `/` to search starting with `e`). `s` summarizes
   the branch being left and carries that summary into the destination as context, so what it tried
   survives the switch. The summary ends with the files that branch read and changed, collected from
-  its tool calls and carried across earlier branch summaries. Navigation requires session recording and no uncollected background tasks.
+  its tool calls and carried across earlier branch summaries. A branch too long to fit the context
+  window is summarized from its newest turns that do. Navigation requires session recording and no uncollected background tasks.
   Pressing Escape at an empty prompt also opens the tree, without affecting Esc during active work.
 
 ### Changed

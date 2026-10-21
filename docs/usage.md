@@ -229,7 +229,8 @@ Only the turn containing your current conversation position is marked:
   Edit and send it to create another branch without deleting the original continuation.
 - **s** summarizes the branch you are leaving and continues at the selected turn, so what it
   learned is still available. One summarization request runs before the switch; if it fails or you
-  interrupt it, the conversation stays where it was.
+  interrupt it, the conversation stays where it was. A branch longer than the context window is
+  summarized from its newest turns that fit, since a request that does not fit teaches nothing.
 - Type to filter. **/** starts explicit search, including queries beginning with `e` or `s`.
   **Alt-E** and **Alt-S** act while filtering; **Ctrl-U** clears the search. Escape cancels the
   picker.

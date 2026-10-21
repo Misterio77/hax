@@ -662,6 +662,52 @@ static void test_kept_tail_survives_reload(void)
     agent_session_free(&resumed);
 }
 
+/* A branch longer than the window cannot be summarized whole, so the request keeps the newest
+ * turns that fit. The file lists still describe the whole branch. */
+static void test_branch_summary_request_keeps_the_newest_turns(void)
+{
+    struct agent_session session;
+    init_session(&session);
+    struct provider provider = {.name = "test", .stream = mock_stream};
+    char *old_prompt = xmalloc(301);
+    memset(old_prompt, 'a', 300);
+    old_prompt[300] = '\0';
+    struct item departing[] = {
+        {.kind = ITEM_TURN_BOUNDARY},
+        {.kind = ITEM_USER_MESSAGE, .text = old_prompt},
+        {.kind = ITEM_ASSISTANT_MESSAGE, .text = xstrdup("old reply")},
+        {.kind = ITEM_TURN_BOUNDARY},
+        {.kind = ITEM_USER_MESSAGE, .text = xstrdup("newest")},
+        {.kind = ITEM_ASSISTANT_MESSAGE, .text = xstrdup("newest reply")},
+    };
+    size_t count = sizeof(departing) / sizeof(departing[0]);
+
+    /* Room for the newest turn, not for both. */
+    config_set_override("context_limit", "160");
+    reset_mock(MOCK_SUCCESS);
+    char *summary = compact_summarize_branch(
+        &(struct compact_params){.session = &session, .provider = &provider}, departing, count,
+        NULL);
+    EXPECT(summary != NULL);
+    EXPECT(mock.last_request_items == 4); /* boundary, prompt, reply, instructions */
+    free(summary);
+
+    /* A window with room sends the branch as it is. */
+    config_set_override("context_limit", "4096");
+    reset_mock(MOCK_SUCCESS);
+    summary = compact_summarize_branch(
+        &(struct compact_params){.session = &session, .provider = &provider}, departing, count,
+        NULL);
+    EXPECT(summary != NULL);
+    EXPECT(mock.last_request_items == 7);
+
+    free(summary);
+    config_set_override("context_limit", NULL);
+    for (size_t i = 0; i < count; i++)
+        item_free(&departing[i]);
+    agent_session_free(&session);
+}
+
 /* The file sections are data, not a model's recollection: paths come from the branch's own tool
  * calls, and a summary carried in from an earlier switch keeps its lists. */
 static void test_branch_summary_records_touched_files(void)
@@ -978,6 +1024,7 @@ int main(void)
     test_keeps_one_session();
     test_tool_call_retries_are_bounded();
     test_resumed_session_floors_at_seed();
+    test_branch_summary_request_keeps_the_newest_turns();
     test_branch_summary_records_touched_files();
     test_branch_summary_carries_earlier_file_lists();
     test_branch_summary_without_files_adds_no_sections();

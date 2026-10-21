@@ -2,6 +2,7 @@
 #include "compact.h"
 
 #include <jansson.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -554,6 +555,39 @@ void compact_run(const struct compact_params *params, struct compact_result *res
     result->outcome = COMPACT_COMPLETE;
 }
 
+/* A branch can be longer than the window its summary has to fit in, and a request that does not
+ * fit teaches nothing. Keep the newest turns that estimate inside half a known window, leaving the
+ * rest for the system prompt, the advertised tools, and the reply itself. Cuts land on typed
+ * prompts because these items travel as messages: starting mid-batch would orphan a tool result. */
+#define BRANCH_REQUEST_BUDGET_DIVISOR 2
+
+static size_t branch_request_start(const struct compact_params *params, const struct item *items,
+                                   size_t n_items)
+{
+    long limit = model_meta_context(params->provider, params->session->model);
+    if (limit <= 0)
+        return 0;
+    long budget = limit / BRANCH_REQUEST_BUDGET_DIVISOR;
+    size_t newest = SIZE_MAX;
+    size_t oldest = SIZE_MAX;
+    /* Estimates only grow with the suffix, so the first turn that does not fit ends the walk. */
+    for (size_t i = n_items; i-- > 0;) {
+        if (!item_is_typed_prompt(&items[i]))
+            continue;
+        size_t start = i > 0 && items[i - 1].kind == ITEM_TURN_BOUNDARY ? i - 1 : i;
+        if (newest == SIZE_MAX)
+            newest = start;
+        if (items_token_estimate(items + start, n_items - start) > budget)
+            break;
+        oldest = start;
+    }
+    if (oldest != SIZE_MAX)
+        return oldest;
+    /* Not even the newest turn estimates inside the budget; send it anyway. The estimate is
+     * pessimistic and tool results are already truncated, so this usually still fits. */
+    return newest != SIZE_MAX ? newest : 0;
+}
+
 /* Files a branch touched, taken from its tool calls rather than from the summary text: a model can
  * forget a path it edited, and a reader deciding whether to trust the branch needs the exact set.
  * Sections carried by an earlier branch summary are merged in, so chained switches keep the
@@ -692,9 +726,10 @@ char *compact_summarize_branch(const struct compact_params *params, const struct
     struct compact_sink sink = {.hooks = &params->hooks};
     turn_init(&sink.turn);
     attempt_log_init(&sink.attempt_log);
+    size_t start = branch_request_start(params, items, n_items);
     int attempt_count = 0;
-    summary =
-        generate_summary(params, &sink, &attempt_count, items, n_items, xstrdup(BRANCH_PROMPT));
+    summary = generate_summary(params, &sink, &attempt_count, items + start, n_items - start,
+                               xstrdup(BRANCH_PROMPT));
     if (attempts)
         *attempts = attempt_count;
     if (params->hooks.is_cancelled && params->hooks.is_cancelled(params->hooks.user)) {
