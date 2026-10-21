@@ -662,6 +662,69 @@ static void test_kept_tail_survives_reload(void)
     agent_session_free(&resumed);
 }
 
+/* A compaction records the same file facts a branch summary does, so the record survives
+ * compacting before switching; an earlier summary's lists are read back, not dropped. */
+static void test_compaction_seed_records_touched_files(void)
+{
+    struct agent_session session;
+    memset(&session, 0, sizeof(session));
+    session.model = xstrdup("model");
+    session.provider_id = "test";
+    agent_session_add_user(&session, "look at the parser");
+    agent_session_append(
+        &session, (struct item){.kind = ITEM_TOOL_CALL,
+                                .call_id = xstrdup("c1"),
+                                .tool_name = xstrdup("read"),
+                                .tool_arguments_json = xstrdup("{\"path\":\"src/parse.c\"}")});
+    agent_session_append(&session, (struct item){.kind = ITEM_TOOL_RESULT,
+                                                 .call_id = xstrdup("c1"),
+                                                 .output = xstrdup("clean")});
+    agent_session_append(
+        &session, (struct item){.kind = ITEM_TOOL_CALL,
+                                .call_id = xstrdup("c2"),
+                                .tool_name = xstrdup("edit"),
+                                .tool_arguments_json = xstrdup("{\"path\":\"src/parse.c\"}")});
+    agent_session_append(
+        &session,
+        (struct item){.kind = ITEM_TOOL_RESULT, .call_id = xstrdup("c2"), .output = xstrdup("ok")});
+    agent_session_add_user(&session, "and the runtime");
+    agent_session_append(&session,
+                         (struct item){.kind = ITEM_ASSISTANT_MESSAGE, .text = xstrdup("done")});
+    struct provider provider = {.name = "test", .stream = mock_stream};
+    reset_mock(MOCK_SUCCESS);
+
+    struct compact_result result = run_compaction(&session, &provider, NULL);
+    EXPECT(result.outcome == COMPACT_COMPLETE);
+    const struct item *seed = NULL;
+    for (size_t i = 0; i < session.n_items; i++)
+        if (session.items[i].origin == ITEM_ORIGIN_COMPACT_SEED)
+            seed = &session.items[i];
+    EXPECT(seed != NULL);
+    EXPECT(seed && seed->text &&
+           strstr(seed->text, "<read-files>\nsrc/parse.c\n</read-files>") != NULL);
+    EXPECT(seed && seed->text &&
+           strstr(seed->text, "<modified-files>\nsrc/parse.c\n</modified-files>") != NULL);
+
+    /* A branch summary that only carries a seed keeps that seed's lists. */
+    struct item departing[] = {
+        {.kind = ITEM_USER_MESSAGE,
+         .origin = ITEM_ORIGIN_COMPACT_SEED,
+         .text = xstrdup("summary\n\n<read-files>\nREADME.md\n</read-files>")},
+        {.kind = ITEM_USER_MESSAGE, .text = xstrdup("carry on")},
+    };
+    reset_mock(MOCK_SUCCESS);
+    char *summary = compact_summarize_branch(
+        &(struct compact_params){.session = &session, .provider = &provider}, departing, 2, NULL);
+    EXPECT(summary != NULL);
+    EXPECT(summary && strstr(summary, "<read-files>\nREADME.md\n</read-files>") != NULL);
+    free(summary);
+    for (size_t i = 0; i < 2; i++)
+        item_free(&departing[i]);
+
+    compact_result_destroy(&result);
+    agent_session_free(&session);
+}
+
 /* A branch longer than the window cannot be summarized whole, so the request keeps the newest
  * turns that fit. The file lists still describe the whole branch. */
 static void test_branch_summary_request_keeps_the_newest_turns(void)
@@ -1024,6 +1087,7 @@ int main(void)
     test_keeps_one_session();
     test_tool_call_retries_are_bounded();
     test_resumed_session_floors_at_seed();
+    test_compaction_seed_records_touched_files();
     test_branch_summary_request_keeps_the_newest_turns();
     test_branch_summary_records_touched_files();
     test_branch_summary_carries_earlier_file_lists();

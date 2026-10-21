@@ -313,7 +313,9 @@ and when the context window is known the kept tail may take at most a quarter of
 dropped from the tail, whole, until it fits. A turn too large to keep — one big file dump — is
 therefore summarized rather than left to overflow the window. A summarization request reads only the
 first 2000 characters of each tool result, marked where it was cut: what continues needs to know
-what was run, not to re-read every byte it printed.
+what was run, not to re-read every byte it printed. Both kinds of summary end with the files the
+summarized part of the conversation read and changed, collected from its tool calls and carried
+across earlier summaries.
 
 When a provider rejects a request because it no longer fits, hax says so and names the remedy:
 `/compact` summarizes the conversation, `/new` starts a fresh one. A prompt that is itself larger

@@ -20,8 +20,7 @@ notes (see [docs/releasing.md](docs/releasing.md)).
   show real ancestry and mark only the current turn. Enter continues after the selected turn;
   `e` edits its prompt (`Alt-E` while filtering, `/` to search starting with `e`). `s` summarizes
   the branch being left and carries that summary into the destination as context, so what it tried
-  survives the switch. The summary ends with the files that branch read and changed, collected from
-  its tool calls and carried across earlier branch summaries. A branch too long to fit the context
+  survives the switch. A branch too long to fit the context
   window is summarized from its newest turns that do. Navigation requires session recording and no uncollected background tasks.
   Pressing Escape at an empty prompt also opens the tree, without affecting Esc during active work.
 
@@ -30,6 +29,9 @@ notes (see [docs/releasing.md](docs/releasing.md)).
 - Summarization reads only the first 2000 characters of each tool result, marked where it was cut.
   Command output is usually most of a window, and a summary needs to know what was run rather than
   reproduce it, so `/compact` and branch summaries no longer pay for the whole dump.
+- Both kinds of summary end with the files the summarized part of the conversation read and changed,
+  collected from its tool calls and carried across earlier summaries, instead of relying on the
+  model to remember paths.
 - Compaction now keeps the newest user turn verbatim after its summary instead of replacing the
   whole window with prose, so work continues from the exact state it was last in. Set
   `compact.keep_turns` to keep more turns, or `0` for the previous summarize-everything behavior.
