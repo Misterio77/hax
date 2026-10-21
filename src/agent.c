@@ -258,15 +258,24 @@ static int render_on_event(const struct stream_event *event, void *user)
     case EV_DONE:
         disp_flush(disp);
         break;
-    case EV_ERROR:
+    case EV_ERROR: {
         /* Closing the render state flushes partial text before the error line. */
         render_open_block(render);
         disp_write_ansi(disp, theme_open(THEME_ERROR));
         disp_printf(disp, "[error: %s]", event->u.error.message);
         disp_write_ansi(disp, ANSI_RESET);
         disp_putc(disp, '\n');
+        /* A request that no longer fits is recoverable, but only by hand: name the remedies. */
+        const char *hint = compact_overflow_hint(event->u.error.message);
+        if (hint) {
+            disp_write_ansi(disp, ANSI_DIM);
+            disp_printf(disp, "[%s]", hint);
+            disp_write_ansi(disp, ANSI_RESET);
+            disp_putc(disp, '\n');
+        }
         disp_flush(disp);
         break;
+    }
     }
 
     return 0;

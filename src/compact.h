@@ -64,6 +64,11 @@ char *compact_summarize_branch(const struct compact_params *params, const struct
  * current. Returns an owned string. */
 char *compact_branch_seed(const char *summary);
 
+/* A borrowed one-line hint when a provider error reads like a request too large for the context
+ * window, or NULL when it says nothing about that. Providers report this as free-form text, so the
+ * match is a short list of literal shapes: a miss costs a hint, never an action. */
+const char *compact_overflow_hint(const char *message);
+
 /* Read the compact.auto setting. Manual compaction does not consult it. */
 int compact_auto_enabled(void);
 

@@ -32,6 +32,24 @@ static void test_over_threshold(void)
     EXPECT(compact_over_threshold(LONG_MAX, LONG_MAX, 100));
 }
 
+/* Providers say "too large" in prose; the hint is what makes that error actionable. */
+static void test_overflow_hint(void)
+{
+    EXPECT(compact_overflow_hint(NULL) == NULL);
+    EXPECT(compact_overflow_hint("") == NULL);
+    EXPECT(compact_overflow_hint("connection reset by peer") == NULL);
+    EXPECT(compact_overflow_hint("rate limit exceeded") == NULL);
+    EXPECT(compact_overflow_hint("prompt is too long: 210000 tokens > 200000 maximum") != NULL);
+    EXPECT(compact_overflow_hint("This model's maximum context length is 128000 tokens") != NULL);
+    EXPECT(compact_overflow_hint("error code: context_length_exceeded") != NULL);
+    EXPECT(compact_overflow_hint("invalid_request_error: reduce the length of the messages") !=
+           NULL);
+    EXPECT(compact_overflow_hint("CONTEXT WINDOW exceeded") != NULL); /* case is not significant */
+    /* The hint names the remedies, not just the condition. */
+    EXPECT(strstr(compact_overflow_hint("context length exceeded"), "/compact") != NULL);
+    EXPECT(strstr(compact_overflow_hint("context length exceeded"), "/new") != NULL);
+}
+
 static void test_should_auto(void)
 {
     /* Drive the config tiers via runtime overrides so the test is
@@ -952,6 +970,7 @@ int main(void)
     setenv("XDG_STATE_HOME", t_tempdir(), 1);
     test_over_threshold();
     test_should_auto();
+    test_overflow_hint();
     test_applies_summary();
     test_retried_attempt_usage_is_billed();
     test_cancelled_retry_usage_is_billed();

@@ -42,6 +42,12 @@ notes (see [docs/releasing.md](docs/releasing.md)).
   llama.cpp v0.7.0. For an older server, set `HAX_LLAMACPP_PORT=8080` or
   `providers.llamacpp.port`.
 
+### Fixed
+
+- A provider error that means "this request no longer fits the context window" now says what to do
+  about it — `/compact` to summarize the conversation, `/new` when the prompt itself is too large —
+  instead of leaving the message to stand alone.
+
 ## [0.6.1] - 2026-10-15
 
 ### Added

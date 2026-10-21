@@ -314,6 +314,10 @@ therefore summarized rather than left to overflow the window. A summarization re
 first 2000 characters of each tool result, marked where it was cut: what continues needs to know
 what was run, not to re-read every byte it printed.
 
+When a provider rejects a request because it no longer fits, hax says so and names the remedy:
+`/compact` summarizes the conversation, `/new` starts a fresh one. A prompt that is itself larger
+than the window cannot be compacted away, so those need the second.
+
 For local servers, configure a context window large enough for the system prompt, project context,
 conversation, and response. A small server-side context often appears as truncated answers rather
 than a hax error; see the provider-specific notes in [providers.md](./providers.md).

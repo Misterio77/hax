@@ -4,6 +4,7 @@
 #include <jansson.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "agent_core.h"
 #include "agent_usage.h"
@@ -106,6 +107,38 @@ static const char BRANCH_SEED_PREAMBLE[] =
     "then returned. The summary below is what that branch did and learned. It describes work that "
     "is no longer the current state — files it changed may have changed since, and nothing it "
     "describes has been re-checked — so verify before relying on it.";
+
+/* Providers report an over-large request as free-form text and none of them flag it structurally,
+ * so these are literal shapes hax can receive, matched without case. A miss costs a hint, never an
+ * action, which is why the list stays short. */
+static const char *const OVERFLOW_PHRASES[] = {
+    "context length",
+    "context window",
+    "context_length_exceeded",
+    "prompt is too long",
+    "input is too long",
+    "maximum context",
+    "too many tokens",
+    "request too large",
+    "exceeds the model's maximum",
+    "reduce the length of the messages",
+};
+
+static const char OVERFLOW_HINT[] = "the request exceeds the context window: /compact summarizes "
+                                    "the conversation, /new starts over";
+
+const char *compact_overflow_hint(const char *message)
+{
+    if (!message || !*message)
+        return NULL;
+    for (size_t i = 0; i < sizeof(OVERFLOW_PHRASES) / sizeof(OVERFLOW_PHRASES[0]); i++) {
+        size_t length = strlen(OVERFLOW_PHRASES[i]);
+        for (const char *at = message; *at; at++)
+            if (strncasecmp(at, OVERFLOW_PHRASES[i], length) == 0)
+                return OVERFLOW_HINT;
+    }
+    return NULL;
+}
 
 int compact_auto_enabled(void)
 {
