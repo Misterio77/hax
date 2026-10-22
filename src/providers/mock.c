@@ -20,6 +20,8 @@
 #include "transport/http.h"
 
 #define TEXT_CHUNK_BYTES 16
+/* Large enough that a chunked call spans several animation frames. */
+#define TOOL_ARG_CHUNK_BYTES 64
 
 struct mock_provider {
     struct provider base;
@@ -106,8 +108,43 @@ static int emit_text_chunked(stream_cb callback, void *callback_user, const char
     return emit_chunked(callback, callback_user, text, delay_ms, tick, tick_user, DELTA_TEXT);
 }
 
+/* Providers stream large arguments in fragments, so a chunked script can reproduce the wait a
+ * call's arguments cause. Chunks are consumed by the callback before each copy is released. */
+static int emit_tool_args_chunked(stream_cb callback, void *callback_user, const char *id,
+                                  const char *args_json, long delay_ms, http_tick_cb tick,
+                                  void *tick_user)
+{
+    size_t length = strlen(args_json);
+    for (size_t offset = 0; offset < length;) {
+        size_t chunk_len =
+            length - offset < TOOL_ARG_CHUNK_BYTES ? length - offset : TOOL_ARG_CHUNK_BYTES;
+        while (offset + chunk_len < length &&
+               ((unsigned char)args_json[offset + chunk_len] & 0xC0) == 0x80)
+            chunk_len--;
+        if (chunk_len == 0)
+            chunk_len =
+                length - offset < TOOL_ARG_CHUNK_BYTES ? length - offset : TOOL_ARG_CHUNK_BYTES;
+
+        char *chunk = xmalloc(chunk_len + 1);
+        memcpy(chunk, args_json + offset, chunk_len);
+        chunk[chunk_len] = '\0';
+        struct stream_event delta = {.kind = EV_TOOL_CALL_DELTA,
+                                     .u.tool_call_delta = {.id = id, .args_delta = chunk}};
+        int rc = callback(&delta, callback_user);
+        free(chunk);
+        if (rc)
+            return rc;
+
+        offset += chunk_len;
+        if (offset < length && msleep(delay_ms, tick, tick_user))
+            return -1;
+    }
+    return 0;
+}
+
 static int emit_tool_call(stream_cb callback, void *callback_user, const char *name,
-                          const char *args_json, long delay_ms, http_tick_cb tick, void *tick_user)
+                          const char *args_json, long delay_ms, int chunked, http_tick_cb tick,
+                          void *tick_user)
 {
     char id[37];
     gen_uuid_v4(id);
@@ -122,9 +159,14 @@ static int emit_tool_call(stream_cb callback, void *callback_user, const char *n
     if (msleep(delay_ms, tick, tick_user))
         return -1;
 
-    struct stream_event delta = {.kind = EV_TOOL_CALL_DELTA,
-                                 .u.tool_call_delta = {.id = id, .args_delta = args_json}};
-    rc = callback(&delta, callback_user);
+    if (chunked)
+        rc = emit_tool_args_chunked(callback, callback_user, id, args_json, delay_ms, tick,
+                                    tick_user);
+    else {
+        struct stream_event delta = {.kind = EV_TOOL_CALL_DELTA,
+                                     .u.tool_call_delta = {.id = id, .args_delta = args_json}};
+        rc = callback(&delta, callback_user);
+    }
     if (rc)
         return rc;
 
@@ -307,8 +349,9 @@ static int emit_script_text(const char *text, enum delta_kind kind, long delay_m
     return rc;
 }
 
-static int emit_script_tool(const char *spec, const char *line, long delay_ms, stream_cb callback,
-                            void *callback_user, http_tick_cb tick, void *tick_user)
+static int emit_script_tool(const char *spec, const char *line, long delay_ms, int chunked,
+                            stream_cb callback, void *callback_user, http_tick_cb tick,
+                            void *tick_user)
 {
     const char *name_end = strpbrk(spec, " \t");
     const char *args_json = name_end ? skip_ws(name_end) : NULL;
@@ -325,8 +368,8 @@ static int emit_script_tool(const char *spec, const char *line, long delay_ms, s
 
     int rc = msleep(delay_ms, tick, tick_user);
     if (!rc)
-        rc =
-            emit_tool_call(callback, callback_user, name, expanded_args, delay_ms, tick, tick_user);
+        rc = emit_tool_call(callback, callback_user, name, expanded_args, delay_ms, chunked, tick,
+                            tick_user);
 
     free(expanded_args);
     free(name);
@@ -380,7 +423,12 @@ static enum script_result play_script_turn(FILE *script, stream_cb callback, voi
                 rc = callback(&event, callback_user);
             }
         } else if (match_directive(directive, "tool", &argument)) {
-            rc = emit_script_tool(argument, line, delay_ms, callback, callback_user, tick,
+            rc = emit_script_tool(argument, line, delay_ms, 0, callback, callback_user, tick,
+                                  tick_user);
+        } else if (match_directive(directive, "tool-stream", &argument)) {
+            /* Streams the arguments over several fragments, as a real provider does for a large
+             * call, so the composing state is visible for as long as the wait is. */
+            rc = emit_script_tool(argument, line, delay_ms, 1, callback, callback_user, tick,
                                   tick_user);
         } else if (match_directive(directive, "usage", &argument)) {
             usage = parse_usage(argument);
@@ -547,7 +595,8 @@ static int interactive_response(const struct context *context, stream_cb callbac
         char *args_json = xasprintf("{\"%s\":\"%s\"}", argument_key, escaped);
         int rc = emit_text_chunked(callback, callback_user, "Sure, on it.", 0, tick, tick_user);
         if (!rc)
-            rc = emit_tool_call(callback, callback_user, tool_name, args_json, 0, tick, tick_user);
+            rc = emit_tool_call(callback, callback_user, tool_name, args_json, 0, 0, tick,
+                                tick_user);
         free(args_json);
         free(escaped);
         free(quoted);

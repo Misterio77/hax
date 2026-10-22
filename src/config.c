@@ -56,6 +56,10 @@ static const struct config_setting REGISTRY[] = {
     {.key = "show_reasoning", .env_var = "HAX_SHOW_REASONING",
      .description = "Show reasoning/CoT deltas live (default off)",
      .choices = CONFIG_CHOICES_BOOL, .editable = 1},
+    {.key = "show_tool_input", .env_var = "HAX_SHOW_TOOL_INPUT",
+     .description = "Preview a large tool call's arguments while they stream; the argument size "
+                    "shows either way",
+     .choices = CONFIG_CHOICES_BOOL, .editable = 1},
     {.key = "sort_models", .env_var = "HAX_SORT_MODELS", .default_value = "auto",
      .description = "Sort the /model picker newest-first; auto uses the provider's own default",
      .choices = CONFIG_CHOICES_TRISTATE, .editable = 1},

@@ -171,6 +171,16 @@ static size_t live_row_budget(void)
     return terminal_budget < display_budget ? terminal_budget : display_budget;
 }
 
+size_t tool_render_live_row_budget(void)
+{
+    return live_row_budget();
+}
+
+void tool_render_compose_live_row(struct buf *out, const char *content)
+{
+    compose_row(out, GUTTER_BODY, content);
+}
+
 /* Spinner drawing bypasses disp, so release a pending newline before handing it the view. The
  * spinner overprints its glyph on the last row's gutter. */
 static void paint_live_rows(struct tool_render *render, const char *const *contents, int count)

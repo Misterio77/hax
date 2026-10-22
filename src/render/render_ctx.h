@@ -5,6 +5,7 @@
 #include <stddef.h>
 
 #include "render/disp.h"
+#include "render/tool_input.h"
 
 struct spinner;
 struct md_renderer;
@@ -47,7 +48,15 @@ struct render_ctx {
         int output_rendered; /* the current attempt wrote text or reasoning to the terminal */
     } stream;
 
+    struct {
+        struct tool_input_preview preview;
+        char *name;    /* owned copy of the streaming call's tool name; NULL when not previewing */
+        int painted;   /* the spinner currently shows this preview's rows */
+        long label_ms; /* when the composing label last picked up the byte count */
+    } tool_input;
+
     int show_reasoning;
+    int show_tool_input;
 };
 
 /* Close the current mode and enter target, releasing its cursor and style state. */
@@ -71,6 +80,18 @@ void render_write_text(struct render_ctx *render, const char *bytes, size_t len)
 
 /* Render assistant text, ignoring initial line endings until visible text arrives. */
 void render_text_delta(struct render_ctx *render, const char *bytes, size_t len);
+
+/* Begin watching a streamed call's arguments: carry its composing label and a running byte count,
+ * and preview the newest argument text when show_tool_input is set. name is copied and may be
+ * NULL. No-op without a spinner, which non-TTY runs never create. */
+void render_tool_input_begin(struct render_ctx *render, const char *name);
+
+/* Append one argument fragment, refreshing the size label and painting the preview once it is
+ * worth showing. */
+void render_tool_input_delta(struct render_ctx *render, const char *delta, size_t len);
+
+/* Stop previewing: erase the live rows and forget the call. Idempotent. */
+void render_tool_input_end(struct render_ctx *render);
 
 /* Show the delayed spinner for a buffered table. No-op outside text mode. */
 void render_show_table_spinner(struct render_ctx *render);

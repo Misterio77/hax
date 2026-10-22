@@ -93,6 +93,7 @@ test_sources = [
     'render/test_markdown_wrap.c',
     'render/test_render_ctx.c',
     'render/test_spinner.c',
+    'render/test_tool_input.c',
     'render/test_tool_render.c',
 
     'system/test_bg_job.c',

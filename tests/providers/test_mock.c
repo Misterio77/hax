@@ -17,6 +17,7 @@ struct stream_capture {
     struct buf tool_args;
     char tool_name[64];
     int tool_call_count;
+    int arg_delta_count;
     int done_event_count;
     int error_event_count;
     int callback_result;
@@ -59,6 +60,7 @@ static int capture_cb(const struct stream_event *ev, void *user)
         snprintf(c->tool_name, sizeof(c->tool_name), "%s", ev->u.tool_call_start.name);
         break;
     case EV_TOOL_CALL_DELTA:
+        c->arg_delta_count++;
         buf_append_str(&c->tool_args, ev->u.tool_call_delta.args_delta);
         break;
     case EV_DONE:
@@ -371,12 +373,46 @@ static void test_interactive_tool_result_after_boundary(void)
     provider->destroy(provider);
 }
 
+static void test_scripted_tool_stream_splits_arguments(void)
+{
+    char *path = write_script("tool-stream write {\"path\":\"a.txt\",\"content\":\""
+                              "a long enough body to span more than one argument fragment\"}\n"
+                              "end-turn\n"
+                              "tool write {\"path\":\"b.txt\"}\n"
+                              "end-turn\n");
+    struct provider *provider = new_scripted_provider(path);
+
+    /* The chunked form splits one call's arguments across several deltas, as a real provider
+     * does for a large call. */
+    struct stream_capture capture;
+    capture_init(&capture);
+    EXPECT(capture_stream(provider, NULL, &capture) == 0);
+    EXPECT(capture.tool_call_count == 1);
+    EXPECT_STR_EQ(capture.tool_name, "write");
+    EXPECT_STR_EQ(buf_str(&capture.tool_args),
+                  "{\"path\":\"a.txt\",\"content\":\""
+                  "a long enough body to span more than one argument fragment\"}");
+    EXPECT(capture.arg_delta_count > 1);
+    capture_free(&capture);
+
+    /* The plain form still arrives as one delta. */
+    capture_init(&capture);
+    EXPECT(capture_stream(provider, NULL, &capture) == 0);
+    EXPECT_STR_EQ(buf_str(&capture.tool_args), "{\"path\":\"b.txt\"}");
+    EXPECT(capture.arg_delta_count == 1);
+    capture_free(&capture);
+
+    provider->destroy(provider);
+    free(path);
+}
+
 int main(void)
 {
     test_scripted_turns();
     test_scripted_cancel();
     test_scripted_callback_minus_two_is_abort();
     test_scripted_final_turn_at_eof();
+    test_scripted_tool_stream_splits_arguments();
     test_scripted_missing_file();
     test_interactive_bash_call();
     test_interactive_read_call();

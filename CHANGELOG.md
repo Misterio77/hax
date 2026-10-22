@@ -9,6 +9,11 @@ notes (see [docs/releasing.md](docs/releasing.md)).
 
 ### Added
 
+- A tool call's composing label now carries the size of the arguments received so far, so a large
+  write no longer waits behind an uninformative label. `show_tool_input` / `HAX_SHOW_TOOL_INPUT`
+  additionally previews the newest argument text while it streams. The call still renders in full
+  when it runs, and the preview is transient: it never enters the conversation or the transcript.
+
 - Ctrl-O and Ctrl-T can open conversation snapshots while the agent is working. Execution
   continues while the pager owns the terminal; queued output appears when it exits.
 

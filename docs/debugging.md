@@ -71,6 +71,7 @@ text <message>
 reasoning <message>
 space
 tool <name> <json>
+tool-stream <name> <json>
 delay <ms>
 usage in=N out=M [cached=K] [cache_write=W] [cache_write_1h=H] [cost=D]
 end-turn
@@ -79,8 +80,10 @@ end-turn
 `text` and `reasoning` decode `\\n`, `\\t`, and `\\\\`, then stream the result in small deltas;
 `reasoning` is displayed only with `HAX_SHOW_REASONING=1`. `space` emits one single-space text
 delta. `delay` sets the pacing for later text, reasoning, space, and tool emissions; zero restores
-burst mode. `tool` takes a name and a single-line JSON object. `usage` sets the accounting on the
-turn's final event, and `end-turn` completes the turn. A final turn may end at EOF.
+burst mode. `tool` takes a name and a single-line JSON object, emitted as one argument delta;
+`tool-stream` sends the same object split into fragments, which is what a real provider does for a
+large call. `usage` sets the accounting on the turn's final event, and `end-turn` completes the
+turn. A final turn may end at EOF.
 
 `{{CWD}}` in text or tool arguments expands to the process working directory, allowing checked-in
 fixtures to exercise path normalization without hard-coding a machine-specific path.
@@ -95,6 +98,7 @@ Mock-provider fixtures live under `scripts/mock/`:
 | `pause.txt` | Pauses between streamed events. |
 | `tasks.txt` | Background-task lifecycle. |
 | `theme.txt` | Semantic color roles. |
+| `tool_input.txt` | Streamed tool-call argument preview (`HAX_SHOW_TOOL_INPUT=1`). |
 
 Mock runs leave nothing behind: no session file for `/resume` to list, and no prompts added
 to Up/Ctrl-R recall, so driving the UI doesn't bury real conversations under fixtures. Pass

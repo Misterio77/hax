@@ -80,6 +80,13 @@ void tool_render_finalize(struct tool_render *render);
 /* Write the gutter prefix for standalone one-line tool output. */
 void tool_render_write_marker_gutter(struct disp *disp);
 
+/* Content cell budget for one live preview row: it must fit both the display width and the
+ * physical terminal, since a wrapped live row breaks the spinner's row accounting. */
+size_t tool_render_live_row_budget(void);
+
+/* Append one prepared live row in the shared preview look: dim gutter, dim content. */
+void tool_render_compose_live_row(struct buf *out, const char *content);
+
 /* Tool display callback; data must point to an initialized struct tool_render. */
 void tool_render_emit(const char *bytes, size_t len, void *data);
 

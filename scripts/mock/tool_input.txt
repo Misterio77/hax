@@ -1,0 +1,16 @@
+# Live preview of streamed tool-call arguments.
+#
+#   HAX_PROVIDER=mock HAX_SHOW_TOOL_INPUT=1 HAX_MOCK_SCRIPT=scripts/mock/tool_input.txt build/hax
+#
+# `tool-stream` splits the arguments across fragments, as a provider does for a large call, so the
+# composing view shows the newest argument text and a growing byte count for a visible interval.
+# The call itself still renders in full once it is dispatched.
+
+delay 300
+tool-stream write {"path":"/tmp/hax-preview.md","content":"# Preview fixture\n\nThe tool-call argument preview shows the newest streamed argument text while a large\ncall is still being written, headed by the call name and a running byte count.\n\n- filler line 1 to grow the argument payload past the preview threshold\n- filler line 2 to grow the argument payload past the preview threshold\n- filler line 3 to grow the argument payload past the preview threshold\n- filler line 4 to grow the argument payload past the preview threshold\n- filler line 5 to grow the argument payload past the preview threshold\n- filler line 6 to grow the argument payload past the preview threshold\n- filler line 7 to grow the argument payload past the preview threshold\n"}
+usage in=300 out=420
+end-turn
+
+delay 400
+text Written to /tmp/hax-preview.md.
+end-turn

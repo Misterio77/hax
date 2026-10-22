@@ -147,6 +147,7 @@ sources = files(
     'src/render/progress.c',
     'src/render/render_ctx.c',
     'src/render/spinner.c',
+    'src/render/tool_input.c',
     'src/render/tool_render.c',
 
     'src/system/bg_job.c',

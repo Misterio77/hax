@@ -96,11 +96,19 @@ static int reasoning_visible(void)
     return config_bool("show_reasoning");
 }
 
+/* Previewed arguments are transient terminal output; the canonical call still renders at
+ * dispatch. */
+static int tool_input_visible(void)
+{
+    return config_bool("show_tool_input");
+}
+
 void agent_display_refresh(struct agent_state *state)
 {
     theme_init();
     struct render_ctx *render = state->render;
     render->show_reasoning = reasoning_visible();
+    render->show_tool_input = tool_input_visible();
     if (render->md) {
         md_free(render->md);
         render->md = NULL;
@@ -198,28 +206,29 @@ static int render_on_event(const struct stream_event *event, void *user)
         render_text_delta(render, event->u.text_delta.text, strlen(event->u.text_delta.text));
         break;
     case EV_TOOL_CALL_START: {
-        /* Tool arguments are invisible until dispatch. Supported providers stream calls
-         * sequentially; a shared key prevents label flicker across a batch. */
-        const char *tool_name = event->u.tool_call_start.name;
+        /* Tool arguments render as a block at dispatch; until then the composing label and, when
+         * enabled, the argument preview are the only sign of the call. */
         render_stream_boundary(render);
-        if (tool_name && *tool_name) {
-            char label[64];
-            snprintf(label, sizeof(label), "[%s] composing...", tool_name);
-            spinner_request_label(render->spinner, "compose", label);
-        }
+        /* Begun after the boundary so entering the waiting mode cannot clear it. */
+        render_tool_input_begin(render, event->u.tool_call_start.name);
         break;
     }
     case EV_REASONING_ITEM:
         render_stream_boundary(render);
         break;
     case EV_TOOL_CALL_END:
+        /* The preview is transient: the call renders as a block at dispatch, so the live rows
+         * must be gone before that. */
+        render_tool_input_end(render);
         /* Clear the composing label after args; settling hides normal dispatch latency. */
         spinner_request_label(render->spinner, "working", "working...");
         break;
-    case EV_TOOL_CALL_DELTA:
-        /* No live display: tool calls render as a single block during
-         * dispatch so parallel calls don't visually interleave. */
+    case EV_TOOL_CALL_DELTA: {
+        const char *args = event->u.tool_call_delta.args_delta;
+        if (args)
+            render_tool_input_delta(render, args, strlen(args));
         break;
+    }
     case EV_REASONING_DELTA: {
         /* Keep the thinking label even when reasoning text is hidden. */
         spinner_request_label(render->spinner, "thinking", "thinking...");
@@ -233,6 +242,7 @@ static int render_on_event(const struct stream_event *event, void *user)
     case EV_RETRY: {
         /* A mid-stream retry abandons any partially rendered output; the next attempt
          * re-streams the whole response. */
+        render_tool_input_end(render);
         render_stream_retry(render);
         render->retry.deadline_ms = monotonic_ms() + event->u.retry.delay_ms;
         render->retry.next_attempt = event->u.retry.attempt + 1;
@@ -264,10 +274,13 @@ static int render_on_event(const struct stream_event *event, void *user)
         break;
     }
     case EV_DONE:
+        /* A stream that ends mid-arguments leaves the preview holding the spinner. */
+        render_tool_input_end(render);
         disp_flush(disp);
         break;
     case EV_ERROR: {
         /* Closing the render state flushes partial text before the error line. */
+        render_tool_input_end(render);
         render_open_block(render);
         disp_write_ansi(disp, theme_open(THEME_ERROR));
         disp_printf(disp, "[error: %s]", event->u.error.message);
@@ -404,7 +417,8 @@ static void write_history(FILE *stream, void *user)
 {
     const struct agent_state *state = user;
     const struct agent_session *session = state->session;
-    struct render_ctx render = {.show_reasoning = reasoning_visible()};
+    struct render_ctx render = {.show_reasoning = reasoning_visible(),
+                                .show_tool_input = tool_input_visible()};
     char *output = NULL;
     size_t output_len = 0;
     FILE *memory_stream = open_memstream(&output, &output_len);
@@ -1316,7 +1330,8 @@ int agent_run(struct provider **provider_io, const struct hax_opts *options)
     /* The embedded disp outlives its Markdown callback; spinner and Markdown handles are owned
      * by this frame. */
     struct render_ctx render = {.disp = {.sink = stdout, .committed_newlines = 1},
-                                .show_reasoning = reasoning_visible()};
+                                .show_reasoning = reasoning_visible(),
+                                .show_tool_input = tool_input_visible()};
     render.spinner = spinner_new("working...");
     render.md = markdown_enabled() ? md_new(md_emit_to_disp, &render.disp, md_cols()) : NULL;
     /* Transcript logging is optional; its API is NULL-safe. */
