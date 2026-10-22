@@ -200,10 +200,6 @@ itself, following the file's Keep a Changelog format.
 
 ## Git conventions
 
-Do not create commits or perform any other git history manipulation unless the user explicitly
-prompts for it. This includes commands such as `git commit`, `git commit --amend`, `git rebase`,
-`git reset`, `git cherry-pick`, and `git merge`.
-
 Do not switch or create branches and do not push anything to remote, unless explicitly prompted.
 
 Commit messages follow these patterns:
