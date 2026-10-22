@@ -9,6 +9,9 @@ notes (see [docs/releasing.md](docs/releasing.md)).
 
 ### Added
 
+- Ctrl-O and Ctrl-T can open conversation snapshots while the agent is working. Execution
+  continues while the pager owns the terminal; queued output appears when it exits.
+
 - Provider credentials can come from a file or a command instead of the environment:
   `providers.<id>.api_key_file` reads a path (sops-nix and other secret stores) and
   `providers.<id>.api_key_command` runs a helper such as `pass show`. Both take the first

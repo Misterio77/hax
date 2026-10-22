@@ -41,6 +41,7 @@
 #include "terminal/input.h"
 #include "terminal/input_core.h"
 #include "terminal/interrupt.h"
+#include "terminal/live_pager.h"
 #include "terminal/notify.h"
 #include "terminal/theme.h"
 #include "terminal/ui.h"
@@ -153,6 +154,7 @@ static void display_stats_line(struct render_ctx *render, const struct provider 
 static int agent_stream_tick(void *user)
 {
     struct render_ctx *render = user;
+    interrupt_poll();
     /* Confirm a pause immediately; the idempotent update also overrides pending labels. */
     if (interrupt_pause_requested() && !interrupt_abort_requested()) {
         spinner_set_label(render->spinner, "pausing", "pausing... (esc again to interrupt)");
@@ -387,23 +389,19 @@ static char *filter_paste(const char *text, void *user)
 
 /* View callbacks borrow agent_run's live state so vector growth and provider replacement cannot
  * stale captured pointers. */
-static void show_transcript_cb(void *user)
+static void write_transcript(FILE *stream, void *user)
 {
     const struct agent_state *state = user;
-    struct spawn_pipe pager;
-    if (view_pager_open(&pager) < 0)
-        return;
     /* Only the model-visible window: a compacted prefix is what the seed stands in for. */
     struct context window = agent_session_context(state->session);
-    transcript_render(pager.stream, window.system_prompt, window.tools, window.n_tools,
-                      window.items, window.n_items);
-    spawn_pipe_close(&pager);
+    transcript_render(stream, window.system_prompt, window.tools, window.n_tools, window.items,
+                      window.n_items);
 }
 
 /* Render history through a private context so paging cannot disturb live display state. Resolve
  * cursor-addressed output before starting the pager. Provider switches are not history items, so
  * the banner identifies the current selection. */
-static void show_history_cb(void *user)
+static void write_history(FILE *stream, void *user)
 {
     const struct agent_state *state = user;
     const struct agent_session *session = state->session;
@@ -447,12 +445,59 @@ static void show_history_cb(void *user)
     md_free(render.md);
     fclose(memory_stream);
 
+    vt_resolve(output, output_len, stream);
+    free(output);
+}
+
+static void show_transcript_cb(void *user)
+{
     struct spawn_pipe pager;
     if (view_pager_open(&pager) == 0) {
-        vt_resolve(output, output_len, pager.stream);
+        write_transcript(pager.stream, user);
         spawn_pipe_close(&pager);
     }
-    free(output);
+}
+
+static void show_history_cb(void *user)
+{
+    struct spawn_pipe pager;
+    if (view_pager_open(&pager) == 0) {
+        write_history(pager.stream, user);
+        spawn_pipe_close(&pager);
+    }
+}
+
+static void poll_live_pager(void *user)
+{
+    struct agent_state *state = user;
+    if (state->live_pager) {
+        if (live_pager_poll(state->live_pager)) {
+            live_pager_close(state->live_pager);
+            state->live_pager = NULL;
+        }
+        return;
+    }
+    enum interrupt_view view = interrupt_take_view();
+    if (view == INTERRUPT_VIEW_NONE)
+        return;
+    char *command = resolve_pager();
+    if (!command)
+        return;
+    command = spawn_shell_cmd_force_utf8(command);
+    FILE *snapshot = tmpfile();
+    if (snapshot) {
+        if (view == INTERRUPT_VIEW_TRANSCRIPT)
+            write_transcript(snapshot, state);
+        else
+            write_history(snapshot, state);
+        state->live_pager = live_pager_open(command, snapshot, state->render->spinner);
+        fclose(snapshot);
+        if (!state->live_pager)
+            ui_error("could not open live pager");
+    } else {
+        ui_error("could not create pager snapshot");
+    }
+    free(command);
 }
 
 void agent_apply_settings(struct agent_state *state, struct provider *provider,
@@ -956,6 +1001,7 @@ static int compact_tick(void *user)
 static int compact_cancelled(void *user)
 {
     (void)user;
+    interrupt_poll();
     interrupt_resolve_pending_escape();
     return interrupt_abort_requested() || interrupt_pause_requested();
 }
@@ -1137,6 +1183,7 @@ static void repl_loop_turn_begin(void *user)
 static int repl_loop_checkpoint(void *user)
 {
     (void)user;
+    interrupt_poll();
     interrupt_resolve_pending_escape();
     if (interrupt_abort_requested())
         return AGENT_LOOP_SIG_ABORT;
@@ -1452,6 +1499,7 @@ int agent_run(struct provider **provider_io, const struct hax_opts *options)
         /* Clear stale editor interrupts before arming first-Esc pause and second-Esc abort. */
         interrupt_clear_requests();
         interrupt_arm();
+        interrupt_set_poll_hook(poll_live_pager, &state);
         struct repl_loop_ctx loop_ctx = {.state = &state};
         struct agent_loop_params loop_params = {
             .session = &session,
@@ -1474,6 +1522,9 @@ int agent_run(struct provider **provider_io, const struct hax_opts *options)
         };
         struct agent_loop_result loop_result;
         agent_loop_run(&loop_params, &loop_result);
+        interrupt_set_poll_hook(NULL, NULL);
+        live_pager_close(state.live_pager);
+        state.live_pager = NULL;
         user_turn_context_tokens = loop_result.last_context_tokens;
         user_turn_errored = loop_result.outcome == AGENT_LOOP_PROVIDER_ERROR;
         int user_turn_complete = loop_result.outcome == AGENT_LOOP_COMPLETE;

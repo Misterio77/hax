@@ -15,6 +15,11 @@ struct spinner;
 struct spinner *spinner_new(const char *label);
 void spinner_free(struct spinner *spinner);
 
+/* Serialize process-wide stdout/stderr descriptor swaps and replay against animation frames.
+ * Lock order is spinner, stdout, stderr; unlock in reverse order. NULL spinner is allowed. */
+void spinner_lock_output(struct spinner *spinner);
+void spinner_unlock_output(struct spinner *spinner);
+
 /* Show the labeled spinner at column zero of the current empty row. Hide erases that row. A
  * first appearance from hidden is deferred briefly; any show or hide within the grace period
  * cancels it. */

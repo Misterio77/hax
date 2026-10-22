@@ -27,6 +27,25 @@ void interrupt_arm(void);
  * input received while armed. Disarming is idempotent. */
 void interrupt_disarm(void);
 
+/* Foreground-thread only. Reserve stdin for an external viewer, suppressing arm calls from
+ * nested work until resume restores active-turn detection. Pairs must not nest. */
+void interrupt_suspend(void);
+void interrupt_resume(void);
+
+enum interrupt_view {
+    INTERRUPT_VIEW_NONE,
+    INTERRUPT_VIEW_HISTORY,
+    INTERRUPT_VIEW_TRANSCRIPT,
+};
+
+/* Consume the most recent Ctrl-O/T request from the active input watcher. */
+enum interrupt_view interrupt_take_view(void);
+
+/* Foreground-thread only. Service terminal handoffs at cooperative execution checkpoints.
+ * The callback must not recursively poll; NULL disables it. */
+void interrupt_set_poll_hook(void (*hook)(void *), void *user);
+void interrupt_poll(void);
+
 /* Requests remain latched until interrupt_clear_requests(). Abort implies pause. These queries are
  * safe from any thread. */
 int interrupt_pause_requested(void);

@@ -23,12 +23,14 @@ struct interrupt_watcher {
     pthread_mutex_t mutex;
     pthread_cond_t state_changed;
     int armed;
+    int suspended;
     int idle;
     int wake_read_fd;
     int wake_write_fd;
     atomic_int pause_requested;
     atomic_int abort_requested;
     atomic_int escape_pending;
+    atomic_int view_requested;
     int initialized;
     int started;
     struct termios saved_termios;
@@ -231,6 +233,12 @@ static void watch_armed_input(void)
             return;
         }
         for (ssize_t i = 0; i < bytes_read; i++) {
+            if (classifier.state == INTERRUPT_CLASSIFIER_IDLE &&
+                (bytes[i] == 0x0f || bytes[i] == 0x14)) {
+                atomic_store(&watcher.view_requested,
+                             bytes[i] == 0x0f ? INTERRUPT_VIEW_HISTORY : INTERRUPT_VIEW_TRANSCRIPT);
+                continue;
+            }
             if (interrupt_classifier_feed(&classifier, bytes[i]))
                 latch_pause_or_abort();
         }
@@ -399,7 +407,7 @@ void interrupt_arm(void)
         return;
 
     pthread_mutex_lock(&watcher.mutex);
-    if (!watcher.armed && enter_raw_mode() == 0) {
+    if (!watcher.armed && !watcher.suspended && enter_raw_mode() == 0) {
         watcher.armed = 1;
         pthread_cond_broadcast(&watcher.state_changed);
     }
@@ -471,6 +479,39 @@ void interrupt_resolve_pending_escape(void)
 
 void interrupt_clear_requests(void)
 {
+    atomic_store(&watcher.view_requested, INTERRUPT_VIEW_NONE);
     atomic_store(&watcher.abort_requested, 0);
     atomic_store(&watcher.pause_requested, 0);
+}
+
+static void (*poll_hook)(void *);
+static void *poll_user;
+
+void interrupt_set_poll_hook(void (*hook)(void *), void *user)
+{
+    poll_hook = hook;
+    poll_user = user;
+}
+
+void interrupt_poll(void)
+{
+    if (poll_hook)
+        poll_hook(poll_user);
+}
+
+enum interrupt_view interrupt_take_view(void)
+{
+    return atomic_exchange(&watcher.view_requested, INTERRUPT_VIEW_NONE);
+}
+
+void interrupt_suspend(void)
+{
+    interrupt_disarm();
+    watcher.suspended = 1;
+}
+
+void interrupt_resume(void)
+{
+    watcher.suspended = 0;
+    interrupt_arm();
 }

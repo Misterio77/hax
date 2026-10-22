@@ -667,6 +667,7 @@ char *task_wait_stream(const char *id, long timeout_ms, int kill_on_timeout,
     for (;;) {
         /* Poll everything: foreign completions end the wait so their notes ride this same
          * round trip instead of aging until the timeout. */
+        interrupt_poll();
         task_poll_all();
         struct task_shared_snapshot snap;
         task_snapshot(t, &snap);

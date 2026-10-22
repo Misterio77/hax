@@ -180,6 +180,7 @@ e2e_scenarios = [
     'oneshot',
     'repl_complete',
     'repl_interrupt',
+    'repl_pager',
     'repl_smoke',
     'repl_tree',
 ]

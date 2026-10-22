@@ -137,6 +137,12 @@ Ctrl-O is the best view for reviewing what happened. Ctrl-T includes the system 
 model-visible tool calls/results, and post-compaction context; use it when diagnosing why the model
 behaved a certain way. Both default to `less -R` when `$PAGER` is unset.
 
+Both shortcuts also work during model requests and running commands. These are snapshots of the
+recorded conversation at the time of opening, including submitted tool calls but not unfinished
+streamed messages or tool results. Execution continues while the pager owns the terminal; hax queues
+its output until you quit. To interrupt, quit the pager first, then press Esc twice. A completed
+user turn waits for the pager to close before returning to the prompt.
+
 ## Project instructions and context
 
 Unless `--raw` is used, hax gives the model:

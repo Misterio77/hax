@@ -300,6 +300,7 @@ char *bash_run_command(const char *command, long timeout_ms, int background, con
     char chunk[4096];
 
     for (;;) {
+        interrupt_poll();
         long now_ms = monotonic_ms();
 
         /* A held transition stretches toward the cap until the expected bytes arrive. */

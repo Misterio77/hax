@@ -621,3 +621,19 @@ void spinner_free(struct spinner *spinner)
     free(spinner->pending_key);
     free(spinner);
 }
+
+void spinner_lock_output(struct spinner *spinner)
+{
+    if (spinner)
+        pthread_mutex_lock(&spinner->mutex);
+    flockfile(stdout);
+    flockfile(stderr);
+}
+
+void spinner_unlock_output(struct spinner *spinner)
+{
+    funlockfile(stderr);
+    funlockfile(stdout);
+    if (spinner)
+        pthread_mutex_unlock(&spinner->mutex);
+}
