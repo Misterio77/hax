@@ -47,9 +47,10 @@ an alias resolving to a dated snapshot, and the upstream endpoint a provider rou
 In the REPL, press Ctrl-T to open the current transcript in `$PAGER`. This is an in-memory view
 and does not require `HAX_TRANSCRIPT`.
 
-Ctrl-O is its user-facing sibling: the same conversation as it was displayed (Markdown, tool
-previews, no system prompt or tool schemas). Reach for Ctrl-T when the question is what the
-model received, and Ctrl-O when it is what happened.
+Ctrl-O is its user-facing sibling: the same conversation as it was displayed (Markdown, no system
+prompt or tool schemas), with one difference — tool results appear in full instead of as the
+terminal's capped preview, so the pager answers what a long command actually printed. Reach for
+Ctrl-T when the question is what the model received, and Ctrl-O when it is what happened.
 
 ## Mock provider
 

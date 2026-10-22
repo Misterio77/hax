@@ -169,6 +169,21 @@ static void test_tab_expanded_to_four_spaces(void)
     EXPECT(strstr(out, "        hello") != NULL);
 }
 
+/* Expansion feeds a pager, where nothing scrolls away, so every line is emitted and no
+ * elision marker is invented. */
+static void test_full_mode_never_caps(void)
+{
+    char in[8000];
+    size_t n = 0;
+    for (int i = 0; i < 200; i++)
+        n += (size_t)snprintf(in + n, sizeof(in) - n, "line%03d\n", i);
+    const char *out = render_one(TOOL_RENDER_FULL, in, n);
+    EXPECT(strstr(out, "line000") != NULL);
+    EXPECT(strstr(out, "line100") != NULL);
+    EXPECT(strstr(out, "line199") != NULL);
+    EXPECT(strstr(out, "more line") == NULL);
+}
+
 static void test_head_only_exceeds_cap_emits_footer(void)
 {
     char in[8000];
@@ -601,6 +616,7 @@ int main(void)
     test_indented_content_preserved();
     test_tab_expanded_to_four_spaces();
     test_head_only_exceeds_cap_emits_footer();
+    test_full_mode_never_caps();
     test_head_tail_under_cap_shows_all_lines();
     test_head_tail_exceeds_cap_emits_marker_and_tail();
     test_head_tail_modest_overflow_replays_inline();

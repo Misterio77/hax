@@ -418,7 +418,8 @@ static void write_history(FILE *stream, void *user)
     const struct agent_state *state = user;
     const struct agent_session *session = state->session;
     struct render_ctx render = {.show_reasoning = reasoning_visible(),
-                                .show_tool_input = tool_input_visible()};
+                                .show_tool_input = tool_input_visible(),
+                                .expand_tool_output = 1};
     char *output = NULL;
     size_t output_len = 0;
     FILE *memory_stream = open_memstream(&output, &output_len);

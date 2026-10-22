@@ -18,6 +18,7 @@ enum tool_render_mode {
     TOOL_RENDER_DIFF,      /* uncapped, line-colored unified diff */
     TOOL_RENDER_HEAD,      /* capped head followed by an elision marker */
     TOOL_RENDER_HEAD_TAIL, /* capped head and tail with middle elision */
+    TOOL_RENDER_FULL,      /* every line, for a sink that can scroll */
 };
 
 /* Streaming renderer for user-visible tool output. Feed accepts arbitrary chunk boundaries and

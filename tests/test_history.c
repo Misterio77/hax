@@ -22,7 +22,8 @@
 
 /* Render through the paged-history sink and resolver. Markdown stays disabled so assertions do
  * not depend on wrapping. Caller frees. */
-static char *render(enum history_detail detail, const struct item *items, size_t n, int reasoning)
+static char *render_with(enum history_detail detail, const struct item *items, size_t n,
+                         int reasoning, int expand)
 {
     char *raw = NULL;
     size_t raw_len = 0;
@@ -32,7 +33,8 @@ static char *render(enum history_detail detail, const struct item *items, size_t
         exit(1);
     }
     struct render_ctx render = {.disp = {.sink = mem, .committed_newlines = 2},
-                                .show_reasoning = reasoning};
+                                .show_reasoning = reasoning,
+                                .expand_tool_output = expand};
     history_render(&render, detail, items, n, 0);
     render_set_mode(&render, RENDER_IDLE);
     disp_commit_newlines(&render.disp);
@@ -49,6 +51,11 @@ static char *render(enum history_detail detail, const struct item *items, size_t
     fclose(settled);
     free(raw);
     return out;
+}
+
+static char *render(enum history_detail detail, const struct item *items, size_t n, int reasoning)
+{
+    return render_with(detail, items, n, reasoning, 0);
 }
 
 /* One user prompt, one verbose bash call, its result, one answer — the
@@ -108,6 +115,34 @@ static void test_full_shows_tool_output(void)
     EXPECT(strstr(out, "\r") == NULL);
     EXPECT(strstr(out, "\x1b[K") == NULL);
     free(out);
+}
+
+/* The pager expands a result instead of repeating the terminal's cap: nothing scrolls away
+ * there, so a truncated answer is the wrong one. */
+static void test_expanded_output_shows_every_line(void)
+{
+    size_t n;
+    struct item *items = sample_turn(&n);
+    char body[2048];
+    size_t len = 0;
+    for (int i = 0; i < 40; i++)
+        len += (size_t)snprintf(body + len, sizeof(body) - len, "ROW_%02d\n", i);
+    items[2].output = body;
+
+    /* The paged default keeps the live shape: head, an elision marker, and the tail. */
+    char *capped = render(HISTORY_FULL, items, n, 0);
+    EXPECT(strstr(capped, "ROW_00") != NULL);
+    EXPECT(strstr(capped, "ROW_39") != NULL);
+    EXPECT(strstr(capped, "ROW_20") == NULL);
+    EXPECT(strstr(capped, "more line") != NULL);
+    free(capped);
+
+    char *expanded = render_with(HISTORY_FULL, items, n, 0, 1);
+    EXPECT(strstr(expanded, "ROW_00") != NULL);
+    EXPECT(strstr(expanded, "ROW_20") != NULL);
+    EXPECT(strstr(expanded, "ROW_39") != NULL);
+    EXPECT(strstr(expanded, "more line") == NULL);
+    free(expanded);
 }
 
 /* A model-only tail (a background launch note, an image-budget note) was
@@ -1044,6 +1079,7 @@ int main(void)
     test_brief_omits_tool_output();
     test_full_shows_tool_output();
     test_hidden_tail_stays_hidden();
+    test_expanded_output_shows_every_line();
     test_full_keeps_collapsed_calls_quiet();
     test_collapsed_cluster_spans_turns_tightly();
     test_brief_names_verbose_tool_args();

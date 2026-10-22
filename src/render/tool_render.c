@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 #include "render/tool_render.h"
 
+#include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,9 +47,24 @@ static const struct preview_limits HEAD_TAIL_PREVIEW_LIMITS = {
     .tail_lines = TAIL_PREVIEW_LINES,
 };
 
+/* Expansion is for a pager, where nothing scrolls away: no cap means no elision marker. */
+static const struct preview_limits FULL_PREVIEW_LIMITS = {
+    .head_lines = INT_MAX,
+    .head_bytes = SIZE_MAX,
+};
+
 static const struct preview_limits *preview_limits_for_mode(enum tool_render_mode mode)
 {
-    return mode == TOOL_RENDER_HEAD_TAIL ? &HEAD_TAIL_PREVIEW_LIMITS : &HEAD_PREVIEW_LIMITS;
+    switch (mode) {
+    case TOOL_RENDER_HEAD_TAIL:
+        return &HEAD_TAIL_PREVIEW_LIMITS;
+    case TOOL_RENDER_FULL:
+        return &FULL_PREVIEW_LIMITS;
+    case TOOL_RENDER_DIFF:
+    case TOOL_RENDER_HEAD:
+        break;
+    }
+    return &HEAD_PREVIEW_LIMITS;
 }
 
 /* Only the beginning of a line can reach the display; the tail ring is bounded separately. */

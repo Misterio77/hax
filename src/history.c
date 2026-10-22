@@ -141,6 +141,8 @@ static void render_result_preview(struct render_ctx *render, const struct item *
 
     enum tool_render_mode mode =
         preview_mode == TOOL_PREVIEW_HEAD_TAIL ? TOOL_RENDER_HEAD_TAIL : TOOL_RENDER_HEAD;
+    if (render->expand_tool_output && !is_diff_output)
+        mode = TOOL_RENDER_FULL;
     struct tool_render renderer;
     tool_render_init(&renderer, &render->disp, NULL, mode);
     if (is_diff_output && !reconstructed && strncmp(body, "--- ", 4) == 0)

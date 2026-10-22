@@ -9,6 +9,9 @@ notes (see [docs/releasing.md](docs/releasing.md)).
 
 ### Added
 
+- Ctrl-O opens tool results in full instead of the terminal's capped preview. The pager can
+  scroll, so a command whose output was elided live is complete there.
+
 - A tool call's composing label now carries the size of the arguments received so far, so a large
   write no longer waits behind an uninformative label. `show_tool_input` / `HAX_SHOW_TOOL_INPUT`
   additionally previews the newest argument text while it streams. The call still renders in full

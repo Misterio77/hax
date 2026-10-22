@@ -133,9 +133,11 @@ The editor supports common readline-style movement and history keys. Notable hax
 | Tab | Complete a `/` command name or argument. |
 | `@` + Tab | Choose a project file with `fzf`. |
 
-Ctrl-O is the best view for reviewing what happened. Ctrl-T includes the system prompt, tool schemas,
-model-visible tool calls/results, and post-compaction context; use it when diagnosing why the model
-behaved a certain way. Both default to `less -R +G` when `$PAGER` is unset. When the pager is `less`,
+Ctrl-O is the best view for reviewing what happened. It shows tool results in full rather than as the
+capped preview the terminal renders, since the pager can scroll: a command whose output was elided
+live is complete there. Ctrl-T includes the system prompt, tool schemas, model-visible tool
+calls/results, and post-compaction context; use it when diagnosing why the model behaved a certain
+way. Both default to `less -R +G` when `$PAGER` is unset. When the pager is `less`,
 hax adds `-R +G` to preserve colors and start at the bottom.
 
 Both shortcuts also work during model requests and running commands. These are snapshots of the

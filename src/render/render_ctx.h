@@ -57,6 +57,9 @@ struct render_ctx {
 
     int show_reasoning;
     int show_tool_input;
+    /* Tool results render in full instead of as a capped preview. Set for a pager, where a whole
+     * result costs nothing and a truncated one is the wrong answer. */
+    int expand_tool_output;
 };
 
 /* Close the current mode and enter target, releasing its cursor and style state. */
