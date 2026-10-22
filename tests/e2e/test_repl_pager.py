@@ -120,7 +120,7 @@ def test_early_pager_exit():
     term.wait_for("❯")
 
 
-def test_less_restores_terminal():
+def test_less_starts_at_bottom_and_restores_terminal():
     if shutil.which("less") is None:
         harness.skip("less not installed")
         return
@@ -131,16 +131,14 @@ def test_less_restores_terminal():
         text After less.
         end-turn
         """,
-        "less -R",
+        "less",
         ("tool-fifo",),
         capture=False,
     )
     term.wait_for("[bash] cat tool-fifo")
     term.send("C-t")
-    term.wait_for("TRANSCRIPT")
-    term.type("/LESS_COMMAND_END")
-    term.send("Enter")
     term.wait_for("LESS_COMMAND_END")
+    term.wait_for("(END)")
     term.type("q")
     term.write_fifo(term.workdir / "tool-fifo", "")
     term.wait_for("After less.")

@@ -312,10 +312,9 @@ static void cursor_hide(void)
     fflush(stdout);
 }
 
-/* Without -R, less prints SGR as the literal text "ESC[1m", and a $PAGER naming it routinely omits
- * the option. It goes directly after the command word: appending would hand it to the last stage
- * of a pipeline, or place it past a `--`. Repeating the user's own -R is harmless. */
-static char *pager_with_color(const char *command)
+/* Keep colors and open at the latest content. Options go directly after the command word:
+ * appending would hand them to the last stage of a pipeline, or place them past a `--`. */
+static char *pager_with_options(const char *command)
 {
     char *head = fs_shell_head(command);
     if (!head)
@@ -323,11 +322,11 @@ static char *pager_with_color(const char *command)
     const char *name = strrchr(head, '/');
     name = name ? name + 1 : head;
     size_t head_end = strspn(command, " \t") + strlen(head);
-    char *colored = strcmp(name, "less") == 0
-                        ? xasprintf("%.*s -R%s", (int)head_end, command, command + head_end)
-                        : xstrdup(command);
+    char *prepared = strcmp(name, "less") == 0
+                         ? xasprintf("%.*s -R +G%s", (int)head_end, command, command + head_end)
+                         : xstrdup(command);
     free(head);
-    return colored;
+    return prepared;
 }
 
 /* Fall back to `more` (passes SGR through) since minimal installs often lack less. A broken $PAGER
@@ -340,7 +339,7 @@ static char *resolve_pager(void)
     const char *configured = getenv("PAGER");
     if (configured && *configured) {
         if (fs_shell_head_resolves(configured))
-            return pager_with_color(configured);
+            return pager_with_options(configured);
         ui_error("$PAGER (%s) not found — fix it, or unset it to use a fallback", configured);
         return NULL;
     }
@@ -348,7 +347,7 @@ static char *resolve_pager(void)
         char *found = fs_which(FALLBACKS[i]);
         if (found) {
             free(found);
-            return pager_with_color(FALLBACKS[i]);
+            return pager_with_options(FALLBACKS[i]);
         }
     }
     ui_error("no pager found — install less or set $PAGER");

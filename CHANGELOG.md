@@ -33,6 +33,9 @@ notes (see [docs/releasing.md](docs/releasing.md)).
 
 ### Changed
 
+- Conversation and transcript views opened with `less` start at the bottom (`+G`), alongside
+  the existing color support (`-R`).
+
 - Summarization reads only the first 2000 characters of each tool result, marked where it was cut.
   Command output is usually most of a window, and a summary needs to know what was run rather than
   reproduce it, so `/compact` and branch summaries no longer pay for the whole dump.

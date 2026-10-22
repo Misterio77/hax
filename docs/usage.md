@@ -135,7 +135,8 @@ The editor supports common readline-style movement and history keys. Notable hax
 
 Ctrl-O is the best view for reviewing what happened. Ctrl-T includes the system prompt, tool schemas,
 model-visible tool calls/results, and post-compaction context; use it when diagnosing why the model
-behaved a certain way. Both default to `less -R` when `$PAGER` is unset.
+behaved a certain way. Both default to `less -R +G` when `$PAGER` is unset. When the pager is `less`,
+hax adds `-R +G` to preserve colors and start at the bottom.
 
 Both shortcuts also work during model requests and running commands. These are snapshots of the
 recorded conversation at the time of opening, including submitted tool calls but not unfinished
